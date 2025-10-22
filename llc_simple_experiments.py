@@ -85,3 +85,67 @@ if __name__ == "__main__":
     run_quartic()
     run_quadratic()
     run_x2y4()
+    
+    
+
+# ---------- 2‑D LLC heat map ----------
+
+def llc_grid_2d(
+    f, grad_f,
+    xmin, xmax, ymin, ymax,
+    nx=5, ny=5,
+    n=500, gamma=5.0, eps=2e-4, iters=120_000, burn=35_000, seed=0
+):
+    """
+    Sweep LLC estimates over a 2-D grid of initialization points w*=(x,y).
+    Returns (xs, ys, lam_map) with lam_map shape = (ny, nx).
+
+    """
+    rng = np.random.default_rng(seed)
+    xs = np.linspace(xmin, xmax, nx)
+    ys = np.linspace(ymin, ymax, ny)
+    lam_map = np.zeros((ny, nx), dtype=float)
+
+    # for reproducibility: vary seed per cell to decorrelate chains
+    for iy, y in enumerate(ys):
+        for ix, x in enumerate(xs):
+            cell_seed = int(rng.integers(0, 2**31-1))
+            lam, _, _ = alg1_llc_estimate(
+                f, grad_f, w_star=[x, y],
+                n=n, gamma=gamma, eps=eps, iters=iters, burn=burn, seed=cell_seed
+            )
+            lam_map[iy, ix] = lam
+    return xs, ys, lam_map
+
+
+def plot_llc_heatmap(xs, ys, lam_map, title="LLC heatmap", cmap="viridis"):
+    """heatmap utility for lam_map with axes labeled by xs, ys."""
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import Normalize
+
+    plt.figure()
+    extent = [xs.min(), xs.max(), ys.min(), ys.max()]
+    plt.imshow(lam_map, origin="lower", extent=extent, aspect="auto",
+               interpolation="nearest", cmap=cmap, norm=Normalize(vmin=np.nanmin(lam_map), vmax=np.nanmax(lam_map)))
+    plt.colorbar(label=r"$\hat{\lambda}(w^*)$")
+    plt.xlabel("x (w* component 1)")
+    plt.ylabel("y (w* component 2)")
+    plt.title(title)
+    plt.tight_layout()
+    plt.show()
+
+
+def run_grid_x2y4_demo():
+    """Example: sweep LLC for f(x,y)=x^2 y^4 over a small window around (0,0)."""
+    f = lambda w: (w[0]**2)*(w[1]**4)
+    grad_f = lambda w: np.array([ 2*w[0]*(w[1]**4),  4*(w[0]**2)*(w[1]**3) ], dtype=np.float64)
+
+    xs, ys, lam_map = llc_grid_2d(
+        f, grad_f,
+        xmin=-0.6, xmax=0.6, ymin=-0.6, ymax=0.6,
+        nx=5, ny=5,
+        n=600, gamma=6.0, eps=1.5e-4, iters=90_000, burn=30_000, seed=123
+    )
+    plot_llc_heatmap(xs, ys, lam_map, title="LLC over (x,y) for f(x,y)=x^2 y^4")
+
+run_grid_x2y4_demo()
