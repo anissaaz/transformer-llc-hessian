@@ -23,11 +23,11 @@ def alg1_llc_estimate(
 
     for t in range(iters):
         # line 5: sample minibatch B (here: just evaluate at w)
-        logL = -f(w)                               # line 6: append logL(B,w)
+        logL = -f(w)                               # line 6: append logL(B,w), no dataset here
         if t >= burn:                              # only record after burn-in
             logL_trace.append(logL)
 
-        # line 7: eta ~ N(0, epsilon I)
+        # line 7: eta ~ N(0, epsilon)
         eta = rng.normal(size=d) * np.sqrt(eps)
 
         # line 8: Δw = (eps/2)[gamma(w* - w) + n beta* ∇_w logL(B,w)] + eta
@@ -57,7 +57,7 @@ def run_quartic():
     grad_f = lambda w: np.array([4.0 * w[0]**3], dtype=np.float64)
     lam, wbic, logL_mean = alg1_llc_estimate(
         f, grad_f, w_star=[0.0],
-        n=200, gamma=25.0, eps=5e-4, iters=60000, burn=15000, seed=0
+        n=200, gamma=2.0, eps=5e-4, iters=60000, burn=15000, seed=0
     )
     print(f"[w^4]  lambda_hat ≈ {lam:.3f}   (theory 0.25)")
 
@@ -67,7 +67,7 @@ def run_quadratic():
     grad_f = lambda w: np.array([2.0 * w[0]], dtype=np.float64)
     lam, wbic, logL_mean = alg1_llc_estimate(
         f, grad_f, w_star=[0.0],
-        n=200, gamma=25.0, eps=5e-4, iters=60000, burn=15000, seed=1
+        n=200, gamma=2.0, eps=5e-4, iters=60000, burn=15000, seed=1
     )
     print(f"[w^2]  lambda_hat ≈ {lam:.3f}   (theory 0.50)")
 
@@ -77,7 +77,7 @@ def run_x2y4():
     grad_f = lambda w: np.array([ 2*w[0]*(w[1]**4),  4*(w[0]**2)*(w[1]**3) ], dtype=np.float64)
     lam, wbic, logL_mean = alg1_llc_estimate(
         f, grad_f, w_star=[0.0, 0.0],
-        n=300, gamma=30.0, eps=3e-4, iters=80000, burn=20000, seed=2
+        n=300, gamma=2.0, eps=3e-4, iters=80000, burn=20000, seed=2
     )
     print(f"[x^2 y^4]  lambda_hat ≈ {lam:.3f}   (theory 0.25)")
 
