@@ -20,13 +20,26 @@ def alg1_llc_estimate(
     beta_star = 1.0 / np.log(n)                    # line 1: β* = 1/log n
 
     logL_trace = []
+    f_min_seen = np.inf
+    
+    fw_star = float(f(w_star))
+    
+    # diagnostic, if ≈ 0 -> w_star near local minimum
+    grad_fw_star = grad_f(np.array(w_star, dtype=np.float64))
+    grad_fw_star_norm = float(np.linalg.norm(grad_fw_star))             
+    # print(f"Pre-run diagnostic: f(w*) = {fw_star:.6g}, ||grad f(w*)|| = {grad_fw_star_norm:.6g}")
+
 
     for t in range(iters):
+        # track minimum f seen so far
+        fw = float(f(w))
+        if fw < f_min_seen:
+            f_min_seen = fw
+        
+         # Langevin steps:
         # line 5: sample minibatch B (here: just evaluate at w)
         logL = -f(w)                               # line 6: append logL(B,w), no dataset here
-        if t >= burn:                              # only record after burn-in
-            logL_trace.append(logL)
-
+       
         # line 7: eta ~ N(0, epsilon)
         eta = rng.normal(size=d) * np.sqrt(eps)
 
@@ -36,7 +49,10 @@ def alg1_llc_estimate(
 
         # line 9: w <- w + Δw
         w = w + delta
-
+        
+        if t >= burn:                              # only record after burn-in
+            logL_trace.append(logL)              
+    
     # line 11: WBIC = - n * mean(arrayLogL)
     logL_mean = np.mean(logL_trace)
     wbic = -n * logL_mean  # since logL is negative, -n*mean(logL) = n * E[f(w)]
@@ -46,8 +62,11 @@ def alg1_llc_estimate(
 
     # line 13: lambda_hat = (WBIC - n L_n(w*)) / log n
     lambda_hat = (wbic - n_Ln_wstar) / np.log(n)
+    
+    # print(f"Min f seen during chain: {f_min_seen:.4g}")
 
     return float(lambda_hat), float(wbic), float(logL_mean)
+
 
 # ---------- Examples ----------
 
@@ -57,7 +76,7 @@ def run_quartic():
     grad_f = lambda w: np.array([4.0 * w[0]**3], dtype=np.float64)
     lam, wbic, logL_mean = alg1_llc_estimate(
         f, grad_f, w_star=[0.0],
-        n=200, gamma=2.0, eps=5e-4, iters=60000, burn=15000, seed=0
+        n=200, gamma=2.0, eps=5e-4, iters=80000, burn=15000, seed=0
     )
     print(f"[w^4]  lambda_hat ≈ {lam:.3f}   (theory 0.25)")
 
@@ -67,7 +86,7 @@ def run_quadratic():
     grad_f = lambda w: np.array([2.0 * w[0]], dtype=np.float64)
     lam, wbic, logL_mean = alg1_llc_estimate(
         f, grad_f, w_star=[0.0],
-        n=200, gamma=2.0, eps=5e-4, iters=60000, burn=15000, seed=1
+        n=200, gamma=2.0, eps=5e-4, iters=80000, burn=15000, seed=1
     )
     print(f"[w^2]  lambda_hat ≈ {lam:.3f}   (theory 0.50)")
 
@@ -77,7 +96,7 @@ def run_x2y4():
     grad_f = lambda w: np.array([ 2*w[0]*(w[1]**4),  4*(w[0]**2)*(w[1]**3) ], dtype=np.float64)
     lam, wbic, logL_mean = alg1_llc_estimate(
         f, grad_f, w_star=[0.0, 0.0],
-        n=300, gamma=2.0, eps=3e-4, iters=80000, burn=20000, seed=2
+        n=300, gamma=2.0, eps=3e-4, iters=150000, burn=50000, seed=2
     )
     print(f"[x^2 y^4]  lambda_hat ≈ {lam:.3f}   (theory 0.25)")
 
@@ -85,22 +104,21 @@ if __name__ == "__main__":
     run_quartic()
     run_quadratic()
     run_x2y4()
-    
-    
 
 # ---------- 2‑D LLC heat map ----------
 
 def llc_grid_2d(
     f, grad_f,
-    xmin, xmax, ymin, ymax,
-    nx=5, ny=5,
-    n=500, gamma=5.0, eps=2e-4, iters=120_000, burn=35_000, seed=0
+    xmin, xmax, ymin, ymax,                                                     # rectangles for LLC measuring
+    nx=5, ny=5,                                                                 # grid resolution (number of points along x and y)
+    n=500, gamma=2.0, eps=2e-4, iters=120_000, burn=35_000, seed=0              # same parameters as in SGLD estimator alg1_llc_estimate
 ):
     """
     Sweep LLC estimates over a 2-D grid of initialization points w*=(x,y).
     Returns (xs, ys, lam_map) with lam_map shape = (ny, nx).
 
     """
+    # builds evenly spaced sample points on each axis
     rng = np.random.default_rng(seed)
     xs = np.linspace(xmin, xmax, nx)
     ys = np.linspace(ymin, ymax, ny)
@@ -114,7 +132,7 @@ def llc_grid_2d(
                 f, grad_f, w_star=[x, y],
                 n=n, gamma=gamma, eps=eps, iters=iters, burn=burn, seed=cell_seed
             )
-            lam_map[iy, ix] = lam
+            lam_map[iy, ix] = lam                   # one scalar llc per point
     return xs, ys, lam_map
 
 
@@ -142,9 +160,9 @@ def run_grid_x2y4_demo():
 
     xs, ys, lam_map = llc_grid_2d(
         f, grad_f,
-        xmin=-0.6, xmax=0.6, ymin=-0.6, ymax=0.6,
+        xmin=-0.05, xmax=0.05, ymin=-0.05, ymax=0.05,
         nx=5, ny=5,
-        n=600, gamma=6.0, eps=1.5e-4, iters=90_000, burn=30_000, seed=123
+        n=600, gamma=2.0, eps=1.5e-4, iters=150_000, burn=50_000, seed=123
     )
     plot_llc_heatmap(xs, ys, lam_map, title="LLC over (x,y) for f(x,y)=x^2 y^4")
 
