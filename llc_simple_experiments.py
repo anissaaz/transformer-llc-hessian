@@ -84,6 +84,20 @@ def setup_quartic():
     est = dict(n=200, gamma=2.0, eps=5e-4, iters=80_000, burn=15_000, seed=0)
     return f, grad_f, w_star, est
 
+def setup_x2_plus_y2():
+    f = lambda w: w[0]**2 + w[1]**2
+    grad_f = lambda w: np.array([2.0*w[0], 2.0*w[1]], dtype=np.float64)
+    w_star = [0.0, 0.0]
+    est = dict(n=300, gamma=2.0, eps=2e-4, iters=150_000, burn=100_000, seed=3)
+    return f, grad_f, w_star, est
+
+def setup_x4_plus_y4():
+    f = lambda w: w[0]**4 + w[1]**4
+    grad_f = lambda w: np.array([4.0*w[0]**3, 4*w[1]**3], dtype=np.float64)
+    w_star = [0.0, 0.0]
+    est = dict(n=300, gamma=2.0, eps=1e-4, iters=250_000, burn=120_000, seed=4)
+    return f, grad_f, w_star, est
+
 def setup_x2y4():
     f = lambda w: (w[0]**2)*(w[1]**4)
     grad_f = lambda w: np.array([2*w[0]*(w[1]**4), 4*(w[0]**2)*(w[1]**3)], dtype=np.float64)
@@ -100,6 +114,16 @@ def run_quartic():
     f, grad_f, w_star, est = setup_quartic()
     lam, wbic, _ = alg1_llc_estimate(f, grad_f, w_star=w_star, **est)
     print(f"[w^4]  lambda_hat ≈ {lam:.3f}   (theory 0.25)")
+    
+def run_x2_plus_y2():
+    f, grad_f, w_star, est = setup_x2_plus_y2()
+    lam, wbic, _ = alg1_llc_estimate(f, grad_f, w_star=w_star, **est)
+    print(f"[x^2 + y^2]  lambda_hat ≈ {lam:.3f}   (theory 1.00)")
+    
+def run_x4_plus_y4():
+    f, grad_f, w_star, est = setup_x4_plus_y4()
+    lam, wbic, _ = alg1_llc_estimate(f, grad_f, w_star=w_star, **est)
+    print(f"[x^4 + y^4]  lambda_hat ≈ {lam:.3f}   (theory 0.50)")
 
 def run_x2y4():
     f, grad_f, w_star, est = setup_x2y4()
@@ -110,6 +134,8 @@ def run_x2y4():
 if __name__ == "__main__":
     run_quadratic()
     run_quartic()
+    run_x2_plus_y2()
+    run_x4_plus_y4()
     run_x2y4()
 
 # ---------- 2‑D LLC heat map ----------
@@ -165,14 +191,34 @@ def plot_llc_heatmap(xs, ys, lam_map, title="LLC heatmap", cmap="viridis"):
     plt.tight_layout()
     plt.show()
 
+def run_grid_x2_plus_y2_demo():
+    f, grad_f, _, est = setup_x2_plus_y2()
+    xs, ys, lam_map = llc_grid_2d(
+        f, grad_f,
+        xmin=-0.05, xmax=0.05, ymin=-0.05, ymax=0.05,
+        nx=9, ny=9,
+        **est
+    )
+    plot_llc_heatmap(xs, ys, lam_map, title="LLC over (x,y) for f(x,y)=x^2+y^2")
+    
+def run_grid_x4_plus_y4_demo():
+    f, grad_f, _, est = setup_x4_plus_y4()
+    xs, ys, lam_map = llc_grid_2d(
+        f, grad_f,
+        xmin=-0.1, xmax=0.1, ymin=-0.1, ymax=0.1,
+        nx=9, ny=9,
+        **est
+    )
+    plot_llc_heatmap(xs, ys, lam_map, title="LLC over (x,y) for f(x,y)=x^4+y^4")
+
 def run_grid_x2y4_demo():
     f, grad_f, _, est = setup_x2y4()
     xs, ys, lam_map = llc_grid_2d(
         f, grad_f,
-        xmin=-0.02, xmax=0.02, ymin=-0.02, ymax=0.02,
+        xmin=-0.01, xmax=0.01, ymin=-0.01, ymax=0.01,
         nx=10, ny=10,
-        **est    # <- reuse
+        **est
     )
     plot_llc_heatmap(xs, ys, lam_map, title="LLC over (x,y) for f(x,y)=x²y⁴")
 
-run_grid_x2y4_demo()
+run_grid_x4_plus_y4_demo()
