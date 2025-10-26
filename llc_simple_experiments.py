@@ -69,6 +69,7 @@ def alg1_llc_estimate(
 
 
 # ---------- Examples ----------
+# 1D:
 
 def setup_quadratic():
     f = lambda w: w[0]**2
@@ -83,6 +84,8 @@ def setup_quartic():
     w_star = [0.0]
     est = dict(n=200, gamma=2.0, eps=5e-4, iters=80_000, burn=15_000, seed=0)
     return f, grad_f, w_star, est
+
+# 2D:
 
 def setup_x2_plus_y2():
     f = lambda w: w[0]**2 + w[1]**2
@@ -102,7 +105,7 @@ def setup_x2y4():
     f = lambda w: (w[0]**2)*(w[1]**4)
     grad_f = lambda w: np.array([2*w[0]*(w[1]**4), 4*(w[0]**2)*(w[1]**3)], dtype=np.float64)
     w_star = [0.0, 0.0]
-    est = dict(n=300, gamma=2.0, eps=1.5e-4, iters=150_000, burn=100_000, seed=2)
+    est = dict(n=300, gamma=1.0, eps=1e-4, iters=250_000, burn=105_000, seed=2)
     return f, grad_f, w_star, est
 
 def run_quadratic():
@@ -160,19 +163,37 @@ def llc_grid_2d(
     rng = np.random.default_rng(defaults["seed"])
     xs = np.linspace(xmin, xmax, nx)
     ys = np.linspace(ymin, ymax, ny)
-    lam_map = np.zeros((ny, nx), dtype=float)
+    
+    lam_mean_map = np.zeros((ny, nx), dtype=float)
+    lam_std_map  = np.zeros((ny, nx), dtype=float)
+
 
     # for reproducibility: vary seed per cell to decorrelate chains
     for iy, y in enumerate(ys):
         for ix, x in enumerate(xs):
-            cell_seed = int(rng.integers(0, 2**31-1))
-            defaults["seed"] = cell_seed
-            lam, _, _ = alg1_llc_estimate(
-                f, grad_f, w_star=[x, y],
-                **defaults
-            )
-            lam_map[iy, ix] = lam                   # one scalar llc per point
-    return xs, ys, lam_map
+            
+            K = 10  # number of SGLD chains per grid cell
+            lam_values = []
+            for k in range(K):
+                defaults["seed"] = int(rng.integers(0, 2**31 - 1))
+                lam, _, _ = alg1_llc_estimate(
+                    f, grad_f, w_star=[x, y],
+                    **defaults
+                )
+                lam_values.append(lam)
+            lam_values = np.asarray(lam_values, dtype=float)
+            lam_mean_map[iy, ix] = lam_values.mean()  # average over K chains per point
+            lam_std_map[iy, ix]  = lam_values.std(ddof=1)
+            
+            
+            # cell_seed = int(rng.integers(0, 2**31-1))
+            # defaults["seed"] = cell_seed
+            # lam, _, _ = alg1_llc_estimate(
+            #     f, grad_f, w_star=[x, y],
+            #     **defaults
+            # )
+            # lam_map[iy, ix] = lam                   # one scalar llc per point
+    return xs, ys, lam_mean_map, lam_std_map
 
 
 def plot_llc_heatmap(xs, ys, lam_map, title="LLC heatmap", cmap="viridis"):
@@ -190,35 +211,102 @@ def plot_llc_heatmap(xs, ys, lam_map, title="LLC heatmap", cmap="viridis"):
     plt.title(title)
     plt.tight_layout()
     plt.show()
+    
+    
+def plot_llc_errorbars(xs, ys, lam_mean_map, lam_std_map, title="LLC with error bars"):
+    """
+    Plot mean ± (std or SE) as error bars for each grid cell (flattened).
+    - use_se=False -> error bars = standard deviation (spread of chain estimates)
+    - use_se=True  -> error bars = standard error = std/sqrt(K) (uncertainty of the mean)
+    """
+    import numpy as np
+    import matplotlib.pyplot as plt
+
+    ny, nx = lam_mean_map.shape
+    Xg, Yg = np.meshgrid(xs, ys)
+    means = lam_mean_map.ravel()
+    stds  = lam_std_map.ravel()
+
+    errs = stds
+
+    # Nice labels (x,y) for the x-axis; you can also keep them numeric if there are many points.
+    labels = [f"({Xg.ravel()[i]:.3f},{Yg.ravel()[i]:.3f})" for i in range(means.size)]
+
+    plt.figure(figsize=(max(8, means.size*0.25), 5))
+    xind = np.arange(means.size)
+    plt.errorbar(xind, means, yerr=errs, fmt='o', capsize=3, linewidth=1)
+    plt.xticks(xind, labels, rotation=90)
+    plt.ylabel(r"$\hat{\lambda}(w^*)$")
+    plt.title(title)
+    plt.tight_layout()
+    plt.show()
+    
+    
+# --------- Diagonal LLC sweep plotting ----------
+def plot_diagonal_from_grid(xs, ys, lam_mean_map, lam_std_map, title="Diagonal LLC sweep from grid"):
+    """
+    Plot mean ± std as error bars along the diagonal of the grid (where x==y indices).
+    - xs, ys: 1D arrays of grid coordinates (same as returned by llc_grid_2d)
+    - lam_mean_map, lam_std_map: 2D arrays of mean/std per grid point
+    - title: plot title
+    """
+    import numpy as np
+    import matplotlib.pyplot as plt
+
+    ny, nx = lam_mean_map.shape
+    diag_len = min(nx, ny)
+    # Extract diagonal values: index pairs (i, i)
+    diag_xs = np.array([xs[i] for i in range(diag_len)])
+    diag_means = np.array([lam_mean_map[i, i] for i in range(diag_len)])
+    diag_stds  = np.array([lam_std_map[i, i] for i in range(diag_len)])
+
+    diag_errs = diag_stds
+
+    plt.figure(figsize=(max(6, diag_len * 0.6), 4))
+    plt.errorbar(diag_xs, diag_means, yerr=diag_errs, fmt='o-', capsize=4, linewidth=2)
+    plt.xlabel("r (diagonal coordinate)")
+    plt.ylabel(r"$\hat{\lambda}(w^*)$")
+    plt.title(title)
+    plt.tight_layout()
+    plt.show()
+
 
 def run_grid_x2_plus_y2_demo():
     f, grad_f, _, est = setup_x2_plus_y2()
-    xs, ys, lam_map = llc_grid_2d(
+    xs, ys, lam_mean_map, lam_std_map = llc_grid_2d(
         f, grad_f,
-        xmin=-0.05, xmax=0.05, ymin=-0.05, ymax=0.05,
+        xmin=-0.5, xmax=0.5, ymin=-0.5, ymax=0.5,
         nx=9, ny=9,
         **est
     )
-    plot_llc_heatmap(xs, ys, lam_map, title="LLC over (x,y) for f(x,y)=x^2+y^2")
+    plot_llc_heatmap(xs, ys, lam_mean_map, title="LLC over (x,y) for f(x,y)=x^2+y^2")
+    plot_llc_errorbars(xs, ys, lam_mean_map, lam_std_map, title="Per-point LLC with error bars (std)")
+    plot_diagonal_from_grid(xs, ys, lam_mean_map, lam_std_map, title="Diagonal LLC sweep from grid")
+    
     
 def run_grid_x4_plus_y4_demo():
     f, grad_f, _, est = setup_x4_plus_y4()
-    xs, ys, lam_map = llc_grid_2d(
+    xs, ys, lam_mean_map, lam_std_map = llc_grid_2d(
         f, grad_f,
-        xmin=-0.1, xmax=0.1, ymin=-0.1, ymax=0.1,
+        xmin=-0.5, xmax=0.5, ymin=-0.5, ymax=0.5,
         nx=9, ny=9,
         **est
     )
-    plot_llc_heatmap(xs, ys, lam_map, title="LLC over (x,y) for f(x,y)=x^4+y^4")
+    plot_llc_heatmap(xs, ys, lam_mean_map, title="LLC mean over (x,y) for f(x,y)=x^4+y^4")
+    plot_llc_errorbars(xs, ys, lam_mean_map, lam_std_map, title="Per-point LLC with error bars (std)")
 
 def run_grid_x2y4_demo():
     f, grad_f, _, est = setup_x2y4()
-    xs, ys, lam_map = llc_grid_2d(
+    xs, ys, lam_mean_map, lam_std_map = llc_grid_2d(
         f, grad_f,
-        xmin=-0.01, xmax=0.01, ymin=-0.01, ymax=0.01,
-        nx=10, ny=10,
+        xmin=-0.5, xmax=0.5, ymin=-0.5, ymax=0.5,
+        nx=9, ny=9,
         **est
     )
-    plot_llc_heatmap(xs, ys, lam_map, title="LLC over (x,y) for f(x,y)=x²y⁴")
+    plot_llc_heatmap(xs, ys, lam_mean_map, title="LLC over (x,y) for f(x,y)=x²y⁴")
+    plot_llc_errorbars(xs, ys, lam_mean_map, lam_std_map, title="Per-point LLC with error bars (std)")
+    plot_diagonal_from_grid(xs, ys, lam_mean_map, lam_std_map, title="Diagonal LLC sweep from grid")
 
-run_grid_x4_plus_y4_demo()
+#run_grid_x4_plus_y4_demo()
+#run_grid_x2_plus_y2_demo()
+run_grid_x2y4_demo()
