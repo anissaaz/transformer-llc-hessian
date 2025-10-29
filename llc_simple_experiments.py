@@ -108,6 +108,12 @@ def setup_x2y4():
     est = dict(n=300, gamma=1.0, eps=1e-4, iters=250_000, burn=105_000, seed=2)
     return f, grad_f, w_star, est
 
+def setup_x3_minus_3xy2():
+    f = lambda w: (w[0]**3 - 3*w[0]*w[0]**2)
+    grad_f = lambda w: np.array([3*(w[0]**2) - 3*(w[1]**2)], [-6*w[0]*w[1]])
+    w_star = [0.0, 0.0]
+    est = dict(n=300, gamma=2.0, eps=2e-4, iters=200_000, burn=100_000, seed=6)
+    return f, grad_f, w_star, est
 # ---------- N-D (3D and higher) helpers ----------
 
 def make_separable_even_powers(powers):
@@ -155,7 +161,7 @@ def run_quartic():
     f, grad_f, w_star, est = setup_quartic()
     lam, wbic, _ = alg1_llc_estimate(f, grad_f, w_star=w_star, **est)
     print(f"[w^4]  lambda_hat ≈ {lam:.3f}   (theory 0.25)")
-    
+
 def run_x2_plus_y2():
     f, grad_f, w_star, est = setup_x2_plus_y2()
     lam, wbic, _ = alg1_llc_estimate(f, grad_f, w_star=w_star, **est)
@@ -170,6 +176,11 @@ def run_x2y4():
     f, grad_f, w_star, est = setup_x2y4()
     lam, wbic, _ = alg1_llc_estimate(f, grad_f, w_star=w_star, **est)
     print(f"[x^2 y^4]  lambda_hat ≈ {lam:.3f}   (theory 0.25)")
+
+def run_x3_minus_3xy2():
+    f, grad_f, w_star, est = setup_x3_minus_3xy2()
+    lam, wbic, _ = alg1_llc_estimate(f, grad_f, w_star=w_star, **est)
+    print(r"$f(x,y) = x^3 - 3xy^2$" + f"lambda_hat ≈ {lam:.3f}")
 
 # --------- N-D demo runners ----------
 def run_3d_quadratic():
@@ -195,8 +206,9 @@ if __name__ == "__main__":
     run_x2_plus_y2()
     run_x4_plus_y4()
     run_x2y4()
+    run_x3_minus_3xy2()
     run_3d_quadratic()
-    run_nd_separable_example([2,2,4, 3])
+    #run_nd_separable_example([2,2,4, 3])
 
 # ---------- 2‑D LLC heat map ----------
 
@@ -363,7 +375,21 @@ def run_grid_x2y4_demo():
     plot_llc_heatmap(xs, ys, lam_mean_map, title="LLC over (x,y) for f(x,y)=x²y⁴")
     plot_llc_errorbars(xs, ys, lam_mean_map, lam_std_map, title="Per-point LLC with error bars (std)")
     plot_diagonal_from_grid(xs, ys, lam_mean_map, lam_std_map, title="Diagonal LLC sweep from grid")
-    
+
+def run_grid_x3_minus_3xy2_demo():
+    f, grad_f, _, est = setup_x3_minus_3xy2()
+    xs, ys, lam_mean_map, lam_std_map = llc_grid_2d(
+        f, grad_f,
+        xmin=-0.6, xmax=0.6, ymin=-0.6, ymax=0.6,
+        nx=9, ny=9,
+        **est
+    )
+    plot_llc_heatmap(xs, ys, lam_mean_map,
+                     title=r"LLC over (x,y) for $f(x,y)=x^3-3xy^2$")
+    plot_llc_errorbars(xs, ys, lam_mean_map, lam_std_map,
+                       title=r"Per-point LLC with error bars (std) for $x^3-3xy^2$")
+    plot_diagonal_from_grid(xs, ys, lam_mean_map, lam_std_map,
+                            title=r"Diagonal LLC sweep for $x^3-3xy^2$")
 
 # ---------- 3D slice visualizations (reuse 2-D grids) ----------
 
@@ -438,3 +464,4 @@ def run_3d_quadratic_slices_demo():
 #run_grid_x2_plus_y2_demo()
 #run_grid_x2y4_demo()
 #run_3d_quadratic_slices_demo()     # XY-slice heatmaps for 3D quadratic
+run_grid_x3_minus_3xy2_demo()
