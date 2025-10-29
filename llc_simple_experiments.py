@@ -109,10 +109,10 @@ def setup_x2y4():
     return f, grad_f, w_star, est
 
 def setup_x3_minus_3xy2():
-    f = lambda w: (w[0]**3 - 3*w[0]*w[0]**2)
-    grad_f = lambda w: np.array([3*(w[0]**2) - 3*(w[1]**2)], [-6*w[0]*w[1]])
+    f = lambda w: (w[0]**3 - 3*w[0]*(w[1]**2))
+    grad_f = lambda w: np.array([3*(w[0]**2) - 3*(w[1]**2), -6*w[0]*w[1]], dtype=np.float64)
     w_star = [0.0, 0.0]
-    est = dict(n=300, gamma=2.0, eps=2e-4, iters=200_000, burn=100_000, seed=6)
+    est = dict(n=300, gamma=2.0, eps=2e-5, iters=200_000, burn=100_000, seed=6)
     return f, grad_f, w_star, est
 # ---------- N-D (3D and higher) helpers ----------
 
@@ -464,4 +464,4 @@ def run_3d_quadratic_slices_demo():
 #run_grid_x2_plus_y2_demo()
 #run_grid_x2y4_demo()
 #run_3d_quadratic_slices_demo()     # XY-slice heatmaps for 3D quadratic
-run_grid_x3_minus_3xy2_demo()
+#run_grid_x3_minus_3xy2_demo()
