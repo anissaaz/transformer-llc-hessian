@@ -108,6 +108,44 @@ def setup_x2y4():
     est = dict(n=300, gamma=1.0, eps=1e-4, iters=250_000, burn=105_000, seed=2)
     return f, grad_f, w_star, est
 
+# ---------- N-D (3D and higher) helpers ----------
+
+def make_separable_even_powers(powers):
+    """
+    Build (f, grad_f, w_star) for f(w) = sum_i |w_i|^{p_i} with even integers p_i (e.g., [2,2,2] or [4,4,2,2]).
+    The gradient is elementwise: ∂f/∂w_i = p_i * w_i^{p_i-1}.
+    """
+    powers = list(powers)
+    d = len(powers)
+
+    def f(w):
+        w = np.asarray(w, dtype=np.float64)
+        return sum((w[i] ** powers[i]) for i in range(d))
+
+    def grad_f(w):
+        w = np.asarray(w, dtype=np.float64)
+        return np.array([powers[i] * (w[i] ** (powers[i] - 1)) for i in range(d)], dtype=np.float64)
+
+    w_star = [0.0] * d
+    return f, grad_f, w_star
+
+def setup_3d_quadratic():
+    """
+    3D example: f(x,y,z) = x^2 + y^2 + z^2 (theoretical LLC at the minimum = 3 * (1/2) = 1.5)
+    """
+    f, grad_f, w_star = make_separable_even_powers([2, 2, 2])
+    est = dict(n=300, gamma=2.0, eps=2e-4, iters=180_000, burn=90_000, seed=5)
+    return f, grad_f, w_star, est
+
+def setup_nd_separable(powers, n=300, gamma=2.0, eps=2e-4, iters=180_000, burn=90_000, seed=0):
+    """
+    Generic N-D separable sum of even powers: powers like [2,2,4,4,...].
+    """
+    f, grad_f, w_star = make_separable_even_powers(powers)
+    est = dict(n=n, gamma=gamma, eps=eps, iters=iters, burn=burn, seed=seed)
+    return f, grad_f, w_star, est
+
+
 def run_quadratic():
     f, grad_f, w_star, est = setup_quadratic()
     lam, wbic, _ = alg1_llc_estimate(f, grad_f, w_star=w_star, **est)
@@ -133,6 +171,23 @@ def run_x2y4():
     lam, wbic, _ = alg1_llc_estimate(f, grad_f, w_star=w_star, **est)
     print(f"[x^2 y^4]  lambda_hat ≈ {lam:.3f}   (theory 0.25)")
 
+# --------- N-D demo runners ----------
+def run_3d_quadratic():
+    f, grad_f, w_star, est = setup_3d_quadratic()
+    lam, wbic, _ = alg1_llc_estimate(f, grad_f, w_star=w_star, **est)
+    print(f"[x^2 + y^2 + z^2]  lambda_hat ≈ {lam:.3f}   (theory 1.50)")
+
+def run_nd_separable_example(powers, **est_overrides):
+    """
+    Run a single-point LLC estimate for f(w)=sum_i |w_i|^{p_i} at w*=0 in any dimension.
+    'powers' is a list like [2,2,4,4,2].
+    """
+    f, grad_f, w_star, est = setup_nd_separable(powers, **est_overrides)
+    lam, wbic, _ = alg1_llc_estimate(f, grad_f, w_star=w_star, **est)
+    theory = sum(1.0 / p for p in powers)  # separable sum: theoretical lambda = sum 1/degree_i
+    print(f"[sum |w|^p, p={powers}]  lambda_hat ≈ {lam:.3f}   (theory {theory:.2f})")
+
+
 
 if __name__ == "__main__":
     run_quadratic()
@@ -140,6 +195,8 @@ if __name__ == "__main__":
     run_x2_plus_y2()
     run_x4_plus_y4()
     run_x2y4()
+    run_3d_quadratic()
+    run_nd_separable_example([2,2,4, 3])
 
 # ---------- 2‑D LLC heat map ----------
 
@@ -306,7 +363,78 @@ def run_grid_x2y4_demo():
     plot_llc_heatmap(xs, ys, lam_mean_map, title="LLC over (x,y) for f(x,y)=x²y⁴")
     plot_llc_errorbars(xs, ys, lam_mean_map, lam_std_map, title="Per-point LLC with error bars (std)")
     plot_diagonal_from_grid(xs, ys, lam_mean_map, lam_std_map, title="Diagonal LLC sweep from grid")
+    
+
+# ---------- 3D slice visualizations (reuse 2-D grids) ----------
+
+def restrict_xy_at_z(f3, grad3, z0):
+    """
+    Freeze z=z0 and return 2D (f, grad_f) in (x,y).
+    """
+    def f2(u):
+        x, y = float(u[0]), float(u[1])
+        return f3(np.array([x, y, z0], dtype=np.float64))
+
+    def grad2(u):
+        x, y = float(u[0]), float(u[1])
+        g3 = grad3(np.array([x, y, z0], dtype=np.float64))
+        return np.array([g3[0], g3[1]], dtype=np.float64)
+
+    return f2, grad2
+
+def restrict_xz_at_y(f3, grad3, y0):
+    """
+    Freeze y=y0 and return 2D (f, grad_f) in (x,z).
+    """
+    def f2(u):
+        x, z = float(u[0]), float(u[1])
+        return f3(np.array([x, y0, z], dtype=np.float64))
+
+    def grad2(u):
+        x, z = float(u[0]), float(u[1])
+        g3 = grad3(np.array([x, y0, z], dtype=np.float64))
+        return np.array([g3[0], g3[2]], dtype=np.float64)
+
+    return f2, grad2
+
+def restrict_yz_at_x(f3, grad3, x0):
+    """
+    Freeze x=x0 and return 2D (f, grad_f) in (y,z).
+    """
+    def f2(u):
+        y, z = float(u[0]), float(u[1])
+        return f3(np.array([x0, y, z], dtype=np.float64))
+
+    def grad2(u):
+        y, z = float(u[0]), float(u[1])
+        g3 = grad3(np.array([x0, y, z], dtype=np.float64))
+        return np.array([g3[1], g3[2]], dtype=np.float64)
+
+    return f2, grad2
+
+def run_3d_quadratic_slices_demo():
+    """
+    Example 3D visualization: f=x^2+y^2+z^2.
+    We show XY-slices at several z values.
+    """
+    f3, grad3, _, est = setup_3d_quadratic()
+
+    # Choose slice levels for the frozen coord and the 2D window/grid.
+    z_levels = [-0.3, 0.0, 0.3]
+    xmin, xmax, ymin, ymax = -0.6, 0.6, -0.6, 0.6
+    nx, ny = 9, 9
+
+    for z0 in z_levels:
+        f2, g2 = restrict_xy_at_z(f3, grad3, z0)
+        xs, ys, lam_mean_map, lam_std_map = llc_grid_2d(
+            f2, g2,
+            xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax,
+            nx=nx, ny=ny,
+            **est
+        )
+        plot_llc_heatmap(xs, ys, lam_mean_map, title=f"LLC slice on XY at z={z0:+.2f}")
 
 #run_grid_x4_plus_y4_demo()
 #run_grid_x2_plus_y2_demo()
-run_grid_x2y4_demo()
+#run_grid_x2y4_demo()
+#run_3d_quadratic_slices_demo()     # XY-slice heatmaps for 3D quadratic
