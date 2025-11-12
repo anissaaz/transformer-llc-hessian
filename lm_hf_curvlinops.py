@@ -188,7 +188,7 @@ def hutchinson_trace_estimate(H, num_matvecs=5):
     Returns:
         trace_estimate: Estimated trace of H as a scalar (PyTorch tensor or float).
     """
-    trace_estimate = hutchinson_trace(H, num_matvecs)
+    trace_estimate = hutchinson_trace(H, num_matvecs).item()
     # print(f"Trace estimate: {trace_estimate}")
     return trace_estimate
 
@@ -209,19 +209,21 @@ def stable_rank(H, num_matvecs=5):
     # print(f"Stable rank: {stable_rank}")
     return stable_rank
 
-def main():
-    # --- Setup ---
-    MODEL = "EleutherAI/pythia-70m-deduped"
+def run_hessian_analysis(model_name, part=None, output_suffix="full_model"):
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    step_tags = get_step_tags(MODEL)
+    step_tags = get_step_tags(model_name)
+    step_tags = [
+        (rev, step)
+        for rev, step in step_tags
+        if step <= 1000 or step % 5000 == 0
+    ]
 
-    tokenizer = AutoTokenizer.from_pretrained(MODEL)
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
     tokenizer.pad_token_id = tokenizer.eos_token_id
 
-    texts = [
-        "The mouse ran away from the cat"
-    ]
+    texts = ["The mouse ran away from the cat"]
 
     batch = tokenizer(texts, return_tensors="pt")
     batch["labels"] = batch["input_ids"][:,1:].clone()
@@ -231,15 +233,19 @@ def main():
     
     for rev, step in step_tags:
         print(f"==> {rev}")
-        model = MyTransformer(tokenizer, MODEL, revision=rev).to(device=device, dtype=bfloat16)
-        # params = [p for p in model.parameters() if p.requires_grad]
+        model = MyTransformer(tokenizer, model_name, revision=rev).to(device=device, dtype=bfloat16)
         
-        import ipdb; ipdb.set_trace()
-        params = [
-            tensor                                          # store only the tensor
-            for name,tensor in model.named_parameters() 
-            # if "hf_model.gpt_neox.layers.5.attention.query_key_value.weight" in name
-            if "hf_model.gpt_neox.layers.5.attention" in name
+        # import ipdb; ipdb.set_trace()
+        if part is not None:
+            params = [
+                tensor                                          # store only the tensor
+                for name, tensor in model.named_parameters() 
+                if part in name
+                ]
+        else:
+            params = [
+                tensor
+                for name, tensor in model.named_parameters()
             ]
         
         hessian = HessianLinearOperator(
@@ -255,7 +261,7 @@ def main():
         
         # Compute metrics
         max_eig = top_k_evals(hessian, k=1)[0]
-        trace_val = hutchinson_trace_estimate(hessian, num_matvecs=5)
+        trace_val = hutchinson_trace_estimate(hessian, num_matvecs=5)       # returns torch.Tensor
         stable_rank_val = stable_rank(hessian, num_matvecs=5)
         
         print(f"Max Eig = {max_eig:.3f}, Trace = {trace_val:.3f}, Stable Rank = {stable_rank_val:.3f}")
@@ -267,10 +273,11 @@ def main():
             max_eig=max_eig,
             stable_rank=stable_rank_val,
         ))
-        
+    
+    csv_name = f"hessian_metrics_{output_suffix}.csv"
     df = pd.DataFrame([asdict(r) for r in results])
-    df.to_csv("hessian_metrics.csv", index=False)
-    print("\nSaved results to hessian_metrics.csv")
+    df.to_csv(csv_name, index=False)
+    print(f"\nSaved results to {csv_name}")
     
 if __name__ == "__main__":
-    main()
+    run_hessian_analysis("EleutherAI/pythia-70m-deduped")
