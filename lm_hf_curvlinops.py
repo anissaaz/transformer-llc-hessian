@@ -206,7 +206,7 @@ def stable_rank(H, num_matvecs=5):
     max_eig = float(top_k_evals(H, k=1)[0])
     
     stable_rank = fro2 / (max_eig**2)
-    # print(f"Stable rank: {stable_rank}")
+    stable_rank = round(stable_rank, 3)
     return stable_rank
 
 def run_hessian_analysis(model_name, part=None, output_suffix="full_model"):
@@ -217,7 +217,7 @@ def run_hessian_analysis(model_name, part=None, output_suffix="full_model"):
     step_tags = [
         (rev, step)
         for rev, step in step_tags
-        if step <= 1000 or step % 5000 == 0
+        if step <= 2 #or step % 5000 == 0
     ]
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -230,6 +230,7 @@ def run_hessian_analysis(model_name, part=None, output_suffix="full_model"):
     batch["input_ids"] = batch["input_ids"][:,:-1].clone()
     
     results: list[HessianMetrics] = []
+    printed_shape = False
     
     for rev, step in step_tags:
         print(f"==> {rev}")
@@ -257,14 +258,17 @@ def run_hessian_analysis(model_name, part=None, output_suffix="full_model"):
             batch_size_fn=batch_size_fn,
         )
         
-        print(f"Hessian shape: {hessian.shape}")
+        # print the Hessian shape only once
+        if not printed_shape:
+            print(f"Hessian shape: {hessian.shape}")
+            printed_shape = True
         
         # Compute metrics
         max_eig = top_k_evals(hessian, k=1)[0]
         trace_val = hutchinson_trace_estimate(hessian, num_matvecs=5)       # returns torch.Tensor
         stable_rank_val = stable_rank(hessian, num_matvecs=5)
         
-        print(f"Max Eig = {max_eig:.3f}, Trace = {trace_val:.3f}, Stable Rank = {stable_rank_val:.3f}")
+        print(f"max eig = {max_eig:.3f}, trace = {trace_val:.3f}, stable rank = {stable_rank_val:.3f}")
         
         results.append(HessianMetrics(
             revision=rev,
