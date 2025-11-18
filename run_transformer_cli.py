@@ -13,10 +13,16 @@ if args.component in ["attention", "attention.query_key_value.weight", "mlp"]:
     part = f"hf_model.gpt_neox.layers.{args.layer}.{args.component}"
     output_suffix = f"layer{args.layer}_{args.component}".replace(".", "_")
     
-elif args.component in ["embed_in", "embed_out"]:
+elif args.component == "embed_in":
     if args.layer is not None:
-        parser.error("For 'embed_in' or 'embed_out', don't provide --layer")
-    part = f"hf_model.gpt_neox.{args.component}"
+        parser.error("For 'embed_in' don't provide --layer")
+    part = f"hf_model.gpt_neox.{args.component}.weight"
+    output_suffix = args.component
+    
+elif args.component == "embed_out":
+    if args.layer is not None:
+        parser.error("For 'embed_out' don't provide --layer")
+    part = f"hf_model.{args.component}.weight"
     output_suffix = args.component
     
 else:
@@ -25,7 +31,7 @@ else:
     print("No layer/component specified - using full model")
     
 print(f"The Hessian metrics will be computed for: {part or 'FULL MODEL'}")
-print(f"output suffix: {output_suffix}")
+#print(f"output suffix: {output_suffix}")
 
 
 run_hessian_analysis(args.model, part=part, output_suffix=output_suffix)

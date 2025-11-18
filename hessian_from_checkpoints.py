@@ -22,17 +22,21 @@ STEP_STRIDE = 1        # e.g. 10 to sample every 10th step
 
 
 @dataclass
-class RowMetrics:
+class HiddenMetrics:
     revision: str
     step: int
     #max_eig: float
     #fro_sq: float
     #stable_rank: float
     #trace: float
-    wrow_max_eig: float
-    wrow_stable_rank: float
-    wrow_trace: float
-    token_id: int
+    # wrow_max_eig: float
+    # wrow_stable_rank: float
+    # wrow_trace: float
+    # token_id: int
+    h_max_eig: float
+    h_stable_rank: float
+    h_trace: float
+    h_dim: int
 
 
 def get_step_tags(model_id: str):
@@ -123,7 +127,7 @@ def _tokenize(tokenizer, text, device):
     )
 
 
-def _row_metrics_for_revision(model_id: str, revision: str, tokenizer, text: str) -> RowMetrics:
+def _hidden_metrics_for_revision(model_id: str, revision: str, tokenizer, text: str) -> HiddenMetrics:
     model = AutoModelForCausalLM.from_pretrained(
         model_id,
         revision=revision,
@@ -142,12 +146,26 @@ def _row_metrics_for_revision(model_id: str, revision: str, tokenizer, text: str
         logits_last = lm_head(h_last)                 # (1, vocab_size)
         target = inputs["input_ids"][:, -1]           # last token
 
+    import ipdb; ipdb.set_trace()
     rm = row_unembed_hessian_metrics_autograd(
         logits_last=logits_last,
         h_last=h_last,
         target=target,
         lm_head_weight=lm_head.weight
     )
+    
+    # --- Hessian wrt h (full-rank, d_model x d_model) ---
+    h_metrics = hidden_hessian_metrics_autograd(
+        h_last=h_last,
+        target=target,
+        lm_head_weight=lm_head.weight,
+        #lm_head_bias=getattr(lm_head, "bias", None)
+    )
+    
+    print(f"[H(h)] d_model={h_metrics['h_dim']}, "
+        f"max_eig={h_metrics['h_max_eig']:.6g}, "
+        f"trace={h_metrics['h_trace']:.6g}, "
+        f"stable_rank={h_metrics['h_stable_rank']:.3f}")
 
     # cleanup
     del model, outputs
@@ -156,13 +174,13 @@ def _row_metrics_for_revision(model_id: str, revision: str, tokenizer, text: str
 
     step = int(re.fullmatch(r"step(\d+)", revision).group(1)) if re.fullmatch(r"step(\d+)", revision) else -1
 
-    return RowMetrics(
+    return HiddenMetrics(
         revision=revision,
         step=step,
-        wrow_max_eig=rm["wrow_max_eig"],
-        wrow_stable_rank=rm["wrow_stable_rank"],
-        wrow_trace=rm["wrow_trace"],
-        token_id=rm["token_id"],
+        h_max_eig=h_metrics["h_max_eig"],
+        h_stable_rank=h_metrics["h_stable_rank"],
+        h_trace=h_metrics["h_trace"],
+        h_dim=h_metrics["h_dim"],
     )
     
 def row_unembed_hessian_metrics_autograd(
@@ -179,8 +197,10 @@ def row_unembed_hessian_metrics_autograd(
     h = h_last.detach().squeeze(0)          # (d_model,)
     z_fixed = logits_last.detach().clone()  # baseline logits, frozen
 
-    # initialize wy at the model's current unembedding row (nice for exact eval point)
+    # initialize wy at the model's current unembedding row
     wy0 = lm_head_weight[y].detach().clone().requires_grad_(True)  # (d_model,)
+    d_model = wy0.numel()
+    print(f"[info] d_model = {d_model}  (unembedding-row dimension)")
 
     def loss_of_wy(wy):
         z = z_fixed.clone()
@@ -191,7 +211,7 @@ def row_unembed_hessian_metrics_autograd(
     H = torch.autograd.functional.hessian(loss_of_wy, wy0)
     H = 0.5 * (H + H.T)              # symmetrize
 
-    # Eigen stuff
+    # Hessian metrics
     evals = torch.linalg.eigvalsh(H)
     lam_max = evals.max()
     trace   = evals.sum()
@@ -204,6 +224,44 @@ def row_unembed_hessian_metrics_autograd(
         "wrow_fro_sq":  float(fro_sq.item()),
         "wrow_stable_rank": stable_rank,
         "token_id": y,
+    }
+
+def hidden_hessian_metrics_autograd(
+    h_last: torch.Tensor,        # (1, d_model)
+    target: torch.Tensor,        # (1,) int64
+    lm_head_weight: torch.Tensor, # (vocab, d_model)
+    lm_head_bias: torch.Tensor | None = None
+):
+    """
+    Build loss that depends on h (the last hidden state), then take Hessian wrt h.
+    Returns eigen-based metrics of H_h (typically full-rank d_model x d_model).
+    """
+    h0 = h_last.detach().squeeze(0).requires_grad_(True)  # (d_model,)
+    W = lm_head_weight                                   # (V, d_model)
+    #b = lm_head_bias                                      # (V,) or None
+
+    def loss_of_h(h):
+        # z = W h + b; shape (1, V)
+        z = F.linear(h.unsqueeze(0), W)               # (1, vocab)
+        return F.cross_entropy(z, target)                # CE on last position
+
+    # Full Hessian wrt h: (d_model x d_model)
+    H = torch.autograd.functional.hessian(loss_of_h, h0)
+    H = 0.5 * (H + H.T)  # numerical symmetrization
+
+    # hessian metrics
+    evals = torch.linalg.eigvalsh(H)
+    lam_max = evals.max()
+    trace   = evals.sum()
+    fro_sq  = torch.sum(evals**2)
+    stable_rank = float(fro_sq / (lam_max**2 + 1e-12))
+
+    return {
+        "h_max_eig":       float(lam_max.item()),
+        "h_trace":         float(trace.item()),
+        "h_fro_sq":        float(fro_sq.item()),
+        "h_stable_rank":   stable_rank,
+        "h_dim":           int(h0.numel()),
     }
 
 def main():
@@ -221,7 +279,7 @@ def main():
     # One tokenizer for all revisions
     tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, cache_dir=HF_HOME)
 
-    results: list[RowMetrics] = []
+    results: list[HiddenMetrics] = []
     for rev, step in step_tags:
         print(f"==> {rev} (step {step})")
         # try:
@@ -232,13 +290,21 @@ def main():
         #     continue
         # results.append(m)
 
+        # try:
+        #     m = _row_metrics_for_revision(MODEL_ID, rev, tokenizer, PROMPT)
+        # except RuntimeError as e:
+        #     print(f"  Skipped {rev}: {e}")
+        #     continue
+        # results.append(m)
+        # print(f"  wrow_max_eig={m.wrow_max_eig:.6f}")
+        
         try:
-            m = _row_metrics_for_revision(MODEL_ID, rev, tokenizer, PROMPT)
+            m = _hidden_metrics_for_revision(MODEL_ID, rev, tokenizer, PROMPT)
         except RuntimeError as e:
             print(f"  Skipped {rev}: {e}")
             continue
         results.append(m)
-        print(f"  wrow_max_eig={m.wrow_max_eig:.6f}")
+        print(f"  h_max_eig={m.h_max_eig:.6f}  |  h_trace={m.h_trace:.6f}")
         
 
     # # Save CSV
@@ -252,14 +318,25 @@ def main():
     # print(f"\nSaved {len(results)} rows to {out_csv}")
     
     # Save CSV for unembedding
-    out_csv_rows = "pythia_unembed_row_metrics.csv"
-    with open(out_csv_rows, "w", newline="") as f:
-        w = csv.writer(f)
-        w.writerow(["revision", "step", "wrow_max_eig", "wrow_stable_rank", "wrow_trace", "token_id"])
-        for m in results:
-            w.writerow([m.revision, m.step, m.wrow_max_eig, m.wrow_stable_rank, m.wrow_trace, m.token_id])
+    # out_csv_rows = "pythia_unembed_row_metrics.csv"
+    # with open(out_csv_rows, "w", newline="") as f:
+    #     w = csv.writer(f)
+    #     w.writerow(["revision", "step", "wrow_max_eig", "wrow_stable_rank", "wrow_trace", "token_id"])
+    #     for m in results:
+    #         w.writerow([m.revision, m.step, m.wrow_max_eig, m.wrow_stable_rank, m.wrow_trace, m.token_id])
             
-    print(f"Saved {len(results)} rows to {out_csv_rows}")
+    # print(f"Saved {len(results)} rows to {out_csv_rows}")
+    
+    
+    # Save CSV for unembedding
+    out_csv = "pythia_hidden_metrics.csv"
+    with open(out_csv, "w", newline="") as f:
+         w = csv.writer(f)
+         w.writerow(["revision", "step", "h_max_eig", "h_stable_rank", "h_trace", "h_dim"])
+         for m in results:
+             w.writerow([m.revision, m.step, m.h_max_eig, m.h_stable_rank, m.h_trace, m.h_dim])
+            
+    print(f"Saved {len(results)} rows to {out_csv}")
 
 
 if __name__ == "__main__":

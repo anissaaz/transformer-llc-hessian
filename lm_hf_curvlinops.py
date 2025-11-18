@@ -19,6 +19,7 @@ from collections import UserDict
 from collections.abc import MutableMapping
 
 from dataclasses import dataclass, asdict
+from datasets import load_dataset
 
 import torch.utils.data as data_utils
 from torch import Tensor, bfloat16, eye, manual_seed, no_grad
@@ -217,15 +218,24 @@ def run_hessian_analysis(model_name, part=None, output_suffix="full_model"):
     step_tags = [
         (rev, step)
         for rev, step in step_tags
-        if step <= 2 #or step % 5000 == 0
+        if step <= 5000 or step % 5000 == 0
     ]
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     tokenizer.pad_token_id = tokenizer.eos_token_id
+    
+    dataset = load_dataset("EleutherAI/pile-preshuffled-seeds", split ="train[:1%]")
+    subset = dataset.shuffle(seed=0).select(range(8))
+    texts = [ex["text"] for ex in subset]
+    
+    import ipdb; ipdb.set_trace()
 
-    texts = ["The mouse ran away from the cat"]
-
-    batch = tokenizer(texts, return_tensors="pt")
+    batch = tokenizer(
+        texts, 
+        return_tensors="pt",
+        padding = True,
+        truncation = True,
+        )
     batch["labels"] = batch["input_ids"][:,1:].clone()
     batch["input_ids"] = batch["input_ids"][:,:-1].clone()
     
@@ -236,7 +246,7 @@ def run_hessian_analysis(model_name, part=None, output_suffix="full_model"):
         print(f"==> {rev}")
         model = MyTransformer(tokenizer, model_name, revision=rev).to(device=device, dtype=bfloat16)
         
-        # import ipdb; ipdb.set_trace()
+        #import ipdb; ipdb.set_trace()
         if part is not None:
             params = [
                 tensor                                          # store only the tensor
@@ -284,4 +294,4 @@ def run_hessian_analysis(model_name, part=None, output_suffix="full_model"):
     print(f"\nSaved results to {csv_name}")
     
 if __name__ == "__main__":
-    run_hessian_analysis("EleutherAI/pythia-70m-deduped")
+    run_hessian_analysis("EleutherAI/pythia-70m-duped")
