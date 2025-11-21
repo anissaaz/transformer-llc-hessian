@@ -2,7 +2,7 @@ from lm_hf_curvlinops import run_hessian_analysis
 
 import argparse
 parser = argparse.ArgumentParser(description="specify which transformer section to compute metrics for")
-parser.add_argument("-m", "--model", help="Pythia HF model id", default="EleutherAI/pythia-70m-deduped")
+parser.add_argument("-m", "--model", help="Pythia HF model id", default="EleutherAI/pythia-14m")
 parser.add_argument("-c", "--component", choices=["embed_in", "attention", "attention.query_key_value.weight", "mlp", "embed_out"], help="component of the layer")
 parser.add_argument("-l", "--layer", type=int, choices=[0, 1, 2, 3, 4, 5], help="model layer")
 args = parser.parse_args()

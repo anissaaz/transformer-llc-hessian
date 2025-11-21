@@ -4,6 +4,9 @@ import re
 
 import pandas as pd
 import matplotlib.pyplot as plt
+import seaborn as sns
+
+EXPERIMENT_DIR = "hessian-pile-batch8"
 
 
 def load_layer_csvs(pattern, label):
@@ -11,7 +14,8 @@ def load_layer_csvs(pattern, label):
     pattern: glob pattern, e.g. 'hessian_metrics_layer*_mlp.csv'
     returns dict[layer_index] -> DataFrame
     """
-    files = sorted(glob.glob(pattern))
+    files = sorted(glob.glob(os.path.join(EXPERIMENT_DIR, pattern)))
+    
     if not files:
         print(f"[{label}] No files matched pattern: {pattern}")
         return {}
@@ -68,7 +72,7 @@ def plot_metric_across_layers(data_by_layer, metric, title, out_path):
 
 
 def main():
-    out_dir = "plots_layers"
+    out_dir = os.path.join(EXPERIMENT_DIR, "plots_layers")
     os.makedirs(out_dir, exist_ok=True)
 
     # ---------- MLP ----------
@@ -119,7 +123,7 @@ def main():
     )
 
     # ---------- Embedding input (embed_in) ----------
-    embed_in_csv = "hessian_metrics_embed_in.csv"
+    embed_in_csv = os.path.join(EXPERIMENT_DIR, "hessian_metrics_embed_in.csv")
     if os.path.exists(embed_in_csv):
         df_embed = pd.read_csv(embed_in_csv).sort_values("step")
 
@@ -148,7 +152,7 @@ def main():
         print("No hessian_metrics_embed_in.csv found yet, skipping embed_in plots.")
         
     # ---------- Embedding output (embed_out) ----------
-    embed_out_csv = "hessian_metrics_embed_out.csv"
+    embed_out_csv = os.path.join(EXPERIMENT_DIR, "hessian_metrics_embed_out.csv")
     if os.path.exists(embed_out_csv):
         df_embed_out = pd.read_csv(embed_out_csv).sort_values("step")
 
