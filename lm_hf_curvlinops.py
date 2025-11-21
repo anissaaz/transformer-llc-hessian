@@ -69,7 +69,7 @@ manual_seed(0)
 
 # --------- Config ---------
 #MODEL = "EleutherAI/pythia-70m-deduped"
-EXPERIMENT_DIR = "hessian-batch40-47"
+EXPERIMENT_DIR = "uniloss-hessian-batch0-7"
 os.makedirs(EXPERIMENT_DIR, exist_ok=True)
 MAX_LEN = 256
 
@@ -224,6 +224,20 @@ def stable_rank(H, num_matvecs=5):
     stable_rank = round(stable_rank, 3)
     return stable_rank
 
+def unigram_loss(logits, targets, vocab_size):
+    valid_targets = targets[targets != -100]                    # targets = batch["labels"].flatten() as defined in curvlinops operator
+    
+    token_count = torch.bincount(valid_targets.cpu(), minlength=vocab_size)     # bincount runs faster on cpu
+    p = (token_count / token_count.sum()).to(logits.device)         # shape [V]
+    
+    # model distribution over vocab
+    log_q = F.log_softmax(logits, dim=-1)       # shape [B*T, V]
+    
+    # KL divergence
+    loss = F.kl_div(log_q, p, reduction="batchmean")
+    
+    return loss
+
 def run_hessian_analysis(model_name, part=None, output_suffix="full_model"):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -237,9 +251,10 @@ def run_hessian_analysis(model_name, part=None, output_suffix="full_model"):
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     tokenizer.pad_token_id = tokenizer.eos_token_id
+    tokenizer_vocab_size = tokenizer.vocab_size
     
     dataset = load_dataset("EleutherAI/the_pile_deduplicated", split ="train[:1%]")
-    subset = dataset.shuffle(seed=0).select(range(40, 48))
+    subset = dataset.shuffle(seed=0).select(range(0, 8))
     texts = [tokenizer.bos_token + ex["text"] + tokenizer.eos_token for ex in subset]
 
     batch = tokenizer(
@@ -255,7 +270,7 @@ def run_hessian_analysis(model_name, part=None, output_suffix="full_model"):
     
     batch["labels"][batch["attention_mask"] == 0] = -100       # labels adjusted for ignore_index=-100 for CE loss
     
-    #import ipdb; ipdb.set_trace()
+    # import ipdb; ipdb.set_trace()
     
     results: list[HessianMetrics] = []
     printed_shape = False
@@ -263,8 +278,8 @@ def run_hessian_analysis(model_name, part=None, output_suffix="full_model"):
     for rev, step in step_tags:
         print(f"==> {rev}")
         model = MyTransformer(tokenizer, model_name, revision=rev).to(device=device, dtype=bfloat16)
+        model_vocab_size = model.hf_model.config.vocab_size
         
-        #import ipdb; ipdb.set_trace()
         if part is not None:
             params = [
                 tensor                                          # store only the tensor
@@ -277,9 +292,12 @@ def run_hessian_analysis(model_name, part=None, output_suffix="full_model"):
                 for name, tensor in model.named_parameters()
             ]
         
+        loss_fn = lambda logits, targets: unigram_loss(logits, targets, model_vocab_size)
+        loss_fn.reduction = "mean"
+        
         hessian = HessianLinearOperator(
             model,
-            CrossEntropyLoss(),
+            loss_fn,
             params,
             [(batch, batch["labels"].flatten())],
             check_deterministic=False,              # don't check randomness
@@ -306,7 +324,7 @@ def run_hessian_analysis(model_name, part=None, output_suffix="full_model"):
             stable_rank=stable_rank_val,
         ))
     
-    csv_name = os.path.join(EXPERIMENT_DIR, f"hessian_metrics_{output_suffix}_40-47.csv")
+    csv_name = os.path.join(EXPERIMENT_DIR, f"hessian_metrics_{output_suffix}_0-7.csv")
     df = pd.DataFrame([asdict(r) for r in results])
     df.to_csv(csv_name, index=False)
     print(f"\nSaved results to {csv_name}")

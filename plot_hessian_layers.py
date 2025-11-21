@@ -6,7 +6,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-EXPERIMENT_DIR = "hessian-pile-batch8"
+EXPERIMENT_DIR = "uniloss-hessian-batch0-7"
 
 
 def load_layer_csvs(pattern, label):
@@ -33,6 +33,10 @@ def load_layer_csvs(pattern, label):
     print(f"[{label}] Loaded {len(data)} layers from {pattern}")
     return data
 
+def add_learning_stage_lines():
+    """Add the dashed lines for three learning phases."""
+    for s in [16, 256, 2000]:
+        plt.axvline(s, linestyle="--", linewidth=1, alpha=0.7)
 
 def plot_metric_across_layers(data_by_layer, metric, title, out_path):
     """
@@ -54,6 +58,8 @@ def plot_metric_across_layers(data_by_layer, metric, title, out_path):
             markersize=3,
             label=f"layer {layer}",
         )
+        
+    add_learning_stage_lines()
 
     plt.xlabel("step")
     plt.ylabel(metric)
@@ -99,7 +105,7 @@ def main():
 
     # ---------- Attention (QKV weights) ----------
     attn_data = load_layer_csvs(
-        "hessian_metrics_layer*attention_query_key_value_weight.csv",
+        "hessian_metrics_layer*attention_query_key_value_weight*.csv",
         "Attention QKV",
     )
 
@@ -123,7 +129,7 @@ def main():
     )
 
     # ---------- Embedding input (embed_in) ----------
-    embed_in_csv = os.path.join(EXPERIMENT_DIR, "hessian_metrics_embed_in.csv")
+    embed_in_csv = os.path.join(EXPERIMENT_DIR, "hessian_metrics_embed_in*.csv")
     if os.path.exists(embed_in_csv):
         df_embed = pd.read_csv(embed_in_csv).sort_values("step")
 
@@ -152,7 +158,7 @@ def main():
         print("No hessian_metrics_embed_in.csv found yet, skipping embed_in plots.")
         
     # ---------- Embedding output (embed_out) ----------
-    embed_out_csv = os.path.join(EXPERIMENT_DIR, "hessian_metrics_embed_out.csv")
+    embed_out_csv = os.path.join(EXPERIMENT_DIR, "hessian_metrics_embed_out*.csv")
     if os.path.exists(embed_out_csv):
         df_embed_out = pd.read_csv(embed_out_csv).sort_values("step")
 
