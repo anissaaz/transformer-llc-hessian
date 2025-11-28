@@ -127,6 +127,31 @@ def main():
         title="Attention QKV: stable rank vs step (symlog)",
         out_path=os.path.join(out_dir, "attn_qkv_stable_rank_symlog.png"),
     )
+    
+        # ---------- Attention (dense weights) ----------
+    attn_data = load_layer_csvs(
+        "hessian_metrics_layer*attention_dense_weight*.csv",
+        "Attention QKV",
+    )
+
+    plot_metric_across_layers(
+        attn_data,
+        metric="trace",
+        title="Attention dense: trace vs step (symlog)",
+        out_path=os.path.join(out_dir, "attn_dense_trace_symlog.png"),
+    )
+    plot_metric_across_layers(
+        attn_data,
+        metric="max_eig",
+        title="Attention dense: max eigenvalue vs step (symlog)",
+        out_path=os.path.join(out_dir, "attn_dense_max_eig_symlog.png"),
+    )
+    plot_metric_across_layers(
+        attn_data,
+        metric="stable_rank",
+        title="Attention dense: stable rank vs step (symlog)",
+        out_path=os.path.join(out_dir, "attn_dense_stable_rank_symlog.png"),
+    )
 
     # ---------- Embedding input (embed_in) ----------
     embed_in_csv = os.path.join(EXPERIMENT_DIR, "hessian_metrics_embed_in*.csv")

@@ -10,6 +10,7 @@ import seaborn as sns
 
 BASE_DIR = Path(".")
 RUN_DIRS = sorted(BASE_DIR.glob("hessian-batch*"))
+MAX_STEP = 10000
 
 def load_attention_qkv_runs():
     """
@@ -59,59 +60,67 @@ def add_learning_stage_lines():
     for s in [16, 256, 2000]:
         plt.axvline(s, linestyle="--", linewidth=1, alpha=0.7)
         
-def plot_attention(attn_df: pd.DataFrame, out_dir="plots_seaborn"):
+def plot_attention(attn_df: pd.DataFrame, out_dir="plots-seaborn-5batches-se"):
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    
+    attn_df_limit = attn_df[attn_df["step"] <= MAX_STEP].copy()
     
     for metric in ["trace", "max_eig", "stable_rank"]:
         plt.figure(figsize=(8, 5))
         sns.lineplot(
-           data=attn_df,
+           data=attn_df_limit,
            x="step", 
            y=metric,
            hue="layer",          # one line per layer
            errorbar="se",        # standard error
-           estimator="mean"
+           estimator="mean",
+           marker="o",           # show points
+           markersize=4,
         )
         
         add_learning_stage_lines()
         plt.xscale("log")
-        plt.yscale("symlog", linthresh=10)
-        plt.title(f"Attention QKV: {metric} vs step (mean ± SE over runs)")
+        #plt.yscale("symlog", linthresh=10)
+        plt.title(f"Attention QKV: {metric} vs step (mean ± SE over runs) - linear")
         plt.grid(True, which="both", alpha=0.3)
         plt.tight_layout()
         
-        out_path = out_dir / f"attn_qkv_{metric}_se.png"
+        out_path = out_dir / "linear-scale-xcut10^4" / f"attn_qkv_{metric}_se_linear.png"
         plt.savefig(out_path, dpi=200)
         plt.close()
         print(f"saved {out_path}")
 
-def plot_embedding(embed_df, kind, out_dir="plots_seaborn"):
+def plot_embedding(embed_df, kind, out_dir="plots-seaborn-5batches-se"):
     """
     kind: 'embed_in' or 'embed_out'
     embed_df has columns [run, step, trace, max_eig, stable_rank]
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    
+    embed_df_limit = embed_df[embed_df["step"] <= MAX_STEP].copy()
 
     for metric in ["trace", "max_eig", "stable_rank"]:
         plt.figure(figsize=(8, 5))
         sns.lineplot(
-            data=embed_df,
+            data=embed_df_limit,
             x="step",
             y=metric,
             errorbar="se",       # standard error
-            estimator="mean"
+            estimator="mean",
+            marker="o",
+            markersize=4,
         )
         
         add_learning_stage_lines()
         plt.xscale("log")
-        plt.yscale("symlog", linthresh=10)
-        plt.title(f"{kind}: {metric} vs step (mean ± SE over runs)")
+        #plt.yscale("symlog", linthresh=10)
+        plt.title(f"{kind}: {metric} vs step (mean ± SE over runs) - linear")
         plt.grid(True, which="both", alpha=0.3)
         plt.tight_layout()
         
-        out_path = out_dir / f"{kind}_{metric}_se.png"
+        out_path = out_dir / "linear-scale-xcut10^4" / f"{kind}_{metric}_se_linear.png"
         plt.savefig(out_path, dpi=200)
         plt.close()
         print(f"saved {out_path}")

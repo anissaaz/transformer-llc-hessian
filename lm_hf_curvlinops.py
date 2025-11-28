@@ -39,37 +39,38 @@ from curvlinops import HessianLinearOperator
 from curvlinops import hutchinson_trace
 from curvlinops import hutchinson_squared_fro
 
-try:
-    # PyTorch 2.x: global setting for scaled-dot-product attention kernels
-    from torch.backends.cuda import sdp_kernel
-    sdp_kernel(enable_flash=False, enable_mem_efficient=False, enable_math=True)
-except Exception:
-    # Fallback: older versions just won't have flash SDPA anyway
-    pass
+import torch
 
+try:
+    # New PyTorch 2.1+ API
+    from torch.nn.attention import sdpa_kernel, SDPBackend
+    sdpa_kernel(SDPBackend.MATH)
+except Exception:
+    # Fallback for older versions
+    torch.backends.cuda.enable_flash_sdp(False)
+    torch.backends.cuda.enable_mem_efficient_sdp(False)
+    torch.backends.cuda.enable_math_sdp(True)
 
 @dataclass
 class HessianMetrics:
     revision: str
     step: int
     trace: float
+    #trace_std: float
     max_eig: float
+    #max_eig_std: float
     stable_rank: float
+    #stable_rank_std: float
 
 # make deterministic
 manual_seed(0)
 
-# %%
-#
 # Data
 # ----
-#
-# We will use synthetic data for simplicity. But obviously this can
-# be replaced with any HF dataloader.
 
 # --------- Config ---------
 #MODEL = "EleutherAI/pythia-70m-deduped"
-EXPERIMENT_DIR = "uniloss-hessian-batch0-7"
+EXPERIMENT_DIR = "hessian-batch0-7"
 os.makedirs(EXPERIMENT_DIR, exist_ok=True)
 MAX_LEN = 256
 
@@ -83,17 +84,9 @@ def get_step_tags(model_id: str):
     step_refs.sort(key=lambda x: x[1])
     return step_refs
 
-# %%
-#
+
 # Model
 # -----
-#
-# Curvlinops supports general :code:`UserDict` inputs. However, everything must
-# be handled inside the :code:`forward` function of the model. This gives
-# the users the most flexibility, without much overhead.
-#
-# Let's wrap the HF model to conform this requirement then.
-
 
 class MyTransformer(Module):
     """
@@ -135,6 +128,7 @@ class MyTransformer(Module):
         attention = data["attention_mask"].to(device)
         outputs = self.hf_model(input_ids, attention_mask=attention)
         logits = outputs.logits
+        
         return logits.reshape(logits.shape[0] * logits.shape[1], -1)
 
 # with no_grad():
@@ -148,14 +142,6 @@ def batch_size_fn(x: MutableMapping):
 #
 # Curvlinops
 # ----------
-#
-# We are now ready to compute the curvature of this HF model using Curvlinops.
-# For this, we need to define a function to tell Curvlinops how to get the
-# batch size of the :code:`UserDict` input batch. Everything else is unchanged
-# from the standard usage of Curvlinops!
-
-
-
 
 
 # def ce_loss(logits, labels):
@@ -224,19 +210,20 @@ def stable_rank(H, num_matvecs=5):
     stable_rank = round(stable_rank, 3)
     return stable_rank
 
-def unigram_loss(logits, targets, vocab_size):
-    valid_targets = targets[targets != -100]                    # targets = batch["labels"].flatten() as defined in curvlinops operator
+# def unigram_loss(logits, targets):
+#     valid_targets = targets[targets != -100]                    # targets = batch["labels"].flatten() as defined in curvlinops operator
+#     vocab_size = logits.shape[-1]
     
-    token_count = torch.bincount(valid_targets.cpu(), minlength=vocab_size)     # bincount runs faster on cpu
-    p = (token_count / token_count.sum()).to(logits.device)         # shape [V]
+#     token_count = torch.bincount(valid_targets.cpu(), minlength=vocab_size)     # bincount runs faster on cpu
+#     p = (token_count / token_count.sum()).to(logits.device)         # shape [V], later converted to 2-d tensor by PyTorch
     
-    # model distribution over vocab
-    log_q = F.log_softmax(logits, dim=-1)       # shape [B*T, V]
+#     # model distribution over vocab
+#     log_q = F.log_softmax(logits, dim=-1)       # shape [B*T, V]
     
-    # KL divergence
-    loss = F.kl_div(log_q, p, reduction="batchmean")
+#     # KL divergence
+#     loss = F.kl_div(log_q, p, reduction="batchmean")
     
-    return loss
+#     return loss
 
 def run_hessian_analysis(model_name, part=None, output_suffix="full_model"):
 
@@ -270,8 +257,6 @@ def run_hessian_analysis(model_name, part=None, output_suffix="full_model"):
     
     batch["labels"][batch["attention_mask"] == 0] = -100       # labels adjusted for ignore_index=-100 for CE loss
     
-    # import ipdb; ipdb.set_trace()
-    
     results: list[HessianMetrics] = []
     printed_shape = False
     
@@ -279,6 +264,8 @@ def run_hessian_analysis(model_name, part=None, output_suffix="full_model"):
         print(f"==> {rev}")
         model = MyTransformer(tokenizer, model_name, revision=rev).to(device=device, dtype=bfloat16)
         model_vocab_size = model.hf_model.config.vocab_size
+        
+        #import ipdb; ipdb.set_trace()
         
         if part is not None:
             params = [
@@ -292,12 +279,13 @@ def run_hessian_analysis(model_name, part=None, output_suffix="full_model"):
                 for name, tensor in model.named_parameters()
             ]
         
-        loss_fn = lambda logits, targets: unigram_loss(logits, targets, model_vocab_size)
-        loss_fn.reduction = "mean"
+        # use this for unigram loss
+        # loss_fn = lambda logits, targets: unigram_loss(logits, targets)
+        # loss_fn.reduction = "mean"
         
         hessian = HessianLinearOperator(
             model,
-            loss_fn,
+            CrossEntropyLoss(),
             params,
             [(batch, batch["labels"].flatten())],
             check_deterministic=False,              # don't check randomness
@@ -314,19 +302,44 @@ def run_hessian_analysis(model_name, part=None, output_suffix="full_model"):
         trace_val = hutchinson_trace_estimate(hessian, num_matvecs=5)       # returns torch.Tensor
         stable_rank_val = stable_rank(hessian, num_matvecs=5)
         
+        # # method error
+        # R = 10  # number of method replicates
+
+        # trace_vals = []
+        # max_eig_vals = []
+        # stable_rank_vals = []
+
+        # for _ in range(R):
+        #     # need to convert tensors to floats 
+        #     trace_vals.append(float(hutchinson_trace(hessian, num_matvecs=50)))
+        #     max_eig_vals.append(float(top_k_evals(hessian, k=1)[0]))
+        #     stable_rank_vals.append(float(stable_rank(hessian, num_matvecs=50)))
+
+        # trace_mean = float(np.mean(trace_vals))
+        # trace_std  = float(np.std(trace_vals))
+
+        # max_eig_mean = float(np.mean(max_eig_vals))
+        # max_eig_std  = float(np.std(max_eig_vals))
+
+        # stable_rank_mean = float(np.mean(stable_rank_vals))
+        # stable_rank_std  = float(np.std(stable_rank_vals))
+        
         print(f"max eig = {max_eig:.3f}, trace = {trace_val:.3f}, stable rank = {stable_rank_val:.3f}")
         
         results.append(HessianMetrics(
             revision=rev,
             step=step,
             trace=trace_val,
+            #trace_std=trace_std,
             max_eig=max_eig,
+            #max_eig_std=max_eig_std,
             stable_rank=stable_rank_val,
+            #stable_rank_std=stable_rank_std,
         ))
     
     csv_name = os.path.join(EXPERIMENT_DIR, f"hessian_metrics_{output_suffix}_0-7.csv")
     df = pd.DataFrame([asdict(r) for r in results])
-    df.to_csv(csv_name, index=False)
+    df.to_csv(csv_name, index=False, float_format="%.6f")
     print(f"\nSaved results to {csv_name}")
     
 if __name__ == "__main__":
