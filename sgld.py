@@ -1,5 +1,5 @@
 from typing import Literal, Union
-
+from torch.optim import Optimizer
 import numpy as np
 import torch
 
@@ -49,6 +49,8 @@ class SGLD(torch.optim.Optimizer):
                 if p.grad is None:
                     continue                    # if no gradient, don't update
                 param_state = self.state[p]
+                
+                #import ipdb; ipdb.set_trace();
                 
                 # Drift term 1: Gradient
                 dw = p.grad.data * group["num_samples"] / group["temperature"]
