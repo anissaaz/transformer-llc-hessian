@@ -26,7 +26,7 @@ from llc_estimator import LLCEstimator
 
 # --------- Config ---------
 MODEL_NAME = "EleutherAI/pythia-14m"
-EXPERIMENT_DIR = "llc-batch0-7"
+EXPERIMENT_DIR = "llc-bs64-steps400"
 os.makedirs(EXPERIMENT_DIR, exist_ok=True)
 MAX_LEN = 256
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
