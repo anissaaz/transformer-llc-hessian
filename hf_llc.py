@@ -175,6 +175,7 @@ def run_llc_analysis(model_name, part=None, output_suffix="full_model"):
         for name, p in chain_model.named_parameters():          # p: parameter_tensor
             if part is None or part in name:
                 p.requires_grad = True
+                print(name, p.shape)
                 params_to_optimize.append(p)
         
         if not params_to_optimize:
