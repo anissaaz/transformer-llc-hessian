@@ -9,8 +9,9 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 BASE_DIR = Path(".")
-RUN_DIRS = sorted(BASE_DIR.glob("hessian-batch*"))
+RUN_DIRS = sorted(BASE_DIR.glob("hessian-batch0-7/14m-seed*"))
 MAX_STEP = 10000
+OUTPUT_DIR = Path("hessian-batch0-7/avg_plots_14m_seeds")
 
 def load_attention_qkv_runs():
     """
@@ -82,22 +83,22 @@ def plot_attention(attn_df: pd.DataFrame, out_dir="plots-seaborn-5batches-se"):
         add_learning_stage_lines()
         plt.xscale("log")
         #plt.yscale("symlog", linthresh=10)
-        plt.title(f"Attention QKV: {metric} vs step (mean ± SE over runs) - linear")
+        plt.title(f"Attention QKV: {metric} vs step - linear")
         plt.grid(True, which="both", alpha=0.3)
         plt.tight_layout()
         
-        out_path = out_dir / "linear-scale-xcut10^4" / f"attn_qkv_{metric}_se_linear.png"
+        out_path = out_dir / "14m-seed1" / "plots" / f"attn_qkv_{metric}_linear.png"
         plt.savefig(out_path, dpi=200)
         plt.close()
         print(f"saved {out_path}")
 
-def plot_embedding(embed_df, kind, out_dir="plots-seaborn-5batches-se"):
+def plot_embedding(embed_df, kind):
     """
     kind: 'embed_in' or 'embed_out'
     embed_df has columns [run, step, trace, max_eig, stable_rank]
     """
-    out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    #out_dir = Path(out_dir)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     
     embed_df_limit = embed_df[embed_df["step"] <= MAX_STEP].copy()
 
@@ -116,26 +117,26 @@ def plot_embedding(embed_df, kind, out_dir="plots-seaborn-5batches-se"):
         add_learning_stage_lines()
         plt.xscale("log")
         #plt.yscale("symlog", linthresh=10)
-        plt.title(f"{kind}: {metric} vs step (mean ± SE over runs) - linear")
+        plt.title(f"{kind}: {metric} vs step\n(Mean ± SE over {len(RUN_DIRS)} seeds)")
         plt.grid(True, which="both", alpha=0.3)
         plt.tight_layout()
         
-        out_path = out_dir / "linear-scale-xcut10^4" / f"{kind}_{metric}_se_linear.png"
+        out_path = OUTPUT_DIR /f"{kind}_{metric}_avg.png"
+        out_path.parent.mkdir(parents=True, exist_ok=True)
         plt.savefig(out_path, dpi=200)
         plt.close()
-        print(f"saved {out_path}")
 
         plt.close()
-        print(f"saved {out_dir / f'{kind}_{metric}_se.png'}")
+        print(f"saved {out_path}")
         
 def main():
-    attn_df = load_attention_qkv_runs()
+    #attn_df = load_attention_qkv_runs()
     embed_in_df  = load_embed_runs("embed_in")
-    embed_out_df = load_embed_runs("embed_out")
+    #embed_out_df = load_embed_runs("embed_out")
 
-    plot_attention(attn_df)
+    #plot_attention(attn_df)
     plot_embedding(embed_in_df,  "embed_in")
-    plot_embedding(embed_out_df, "embed_out")
+    #plot_embedding(embed_out_df, "embed_out")
 
 
 if __name__ == "__main__":

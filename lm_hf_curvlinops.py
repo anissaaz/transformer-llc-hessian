@@ -70,7 +70,7 @@ manual_seed(0)
 
 # --------- Config ---------
 #MODEL = "EleutherAI/pythia-70m-deduped"
-EXPERIMENT_DIR = "hessian-batch0-7"
+EXPERIMENT_DIR = "hessian-batch0-7/14m-seed9"
 os.makedirs(EXPERIMENT_DIR, exist_ok=True)
 MAX_LEN = 256
 
@@ -236,7 +236,7 @@ def run_hessian_analysis(model_name, part=None, output_suffix="full_model"):
         if step in {0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1000, 2000, 5000, 10000, 20000, 50000, 100000, 140000}
     ]
 
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    tokenizer = AutoTokenizer.from_pretrained("EleutherAI/pythia-14m")
     tokenizer.pad_token_id = tokenizer.eos_token_id
     tokenizer_vocab_size = tokenizer.vocab_size
     
