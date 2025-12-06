@@ -1,12 +1,15 @@
 import torch
 import numpy as np
+import matplotlib
+#matplotlib.use("MacOSX")
 import matplotlib.pyplot as plt
 from matplotlib.colors import Normalize
 
+
 def f(w):
     x, y = w
-    return x**3 - 3*x*y**2
-f.display_name = r"$f(x,y) = x^3 - 3xy^2$"
+    return x**4 + y**4
+f.display_name = r"$f(x,y) = x^4 + y^4$"
 
 def compute_hessian_and_eigs(f, w0):
     w = torch.tensor(w0, dtype=torch.float64, requires_grad=True)
@@ -108,7 +111,7 @@ def plot_hessian_heatmap(xs, ys, data_map, title, cmap="viridis", use_percentile
     plt.ylabel("y")
     plt.title(title)
     plt.tight_layout()
-    plt.show()
+    plt.savefig(f"{title}.png")
     
 if __name__ == "__main__":
     xs, ys, eigmax_map, trace_map, stable_rank_map = hessian_grid_2d(f, xmin=-1, xmax=1, ymin=-1, ymax=1, nx=15, ny=15)

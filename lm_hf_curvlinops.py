@@ -70,8 +70,10 @@ manual_seed(0)
 
 # --------- Config ---------
 #MODEL = "EleutherAI/pythia-70m-deduped"
-EXPERIMENT_DIR = "hessian-batch0-7/14m-seed9"
+EXPERIMENT_DIR = "hessian-batch0-7/14m"
 os.makedirs(EXPERIMENT_DIR, exist_ok=True)
+COMPUTE_GRADS = True
+COMPUTE_HESSIAN = False
 MAX_LEN = 256
 
 def get_step_tags(model_id: str):
@@ -251,6 +253,7 @@ def run_hessian_analysis(model_name, part=None, output_suffix="full_model"):
         truncation = True,
         max_length=MAX_LEN,
         )
+    
     batch["labels"] = batch["input_ids"][:,1:].clone()
     batch["input_ids"] = batch["input_ids"][:,:-1].clone()
     batch["attention_mask"] = batch["attention_mask"][:,:-1].clone()        # align with input_ids ?
@@ -259,6 +262,9 @@ def run_hessian_analysis(model_name, part=None, output_suffix="full_model"):
     
     results: list[HessianMetrics] = []
     printed_shape = False
+    
+    grads_dir = os.path.join(EXPERIMENT_DIR, f"gradients-{output_suffix}")
+    os.makedirs(grads_dir, exist_ok=True)
     
     for rev, step in step_tags:
         print(f"==> {rev}")
@@ -270,7 +276,7 @@ def run_hessian_analysis(model_name, part=None, output_suffix="full_model"):
         if part is not None:
             params = [
                 tensor                                          # store only the tensor
-                for name, tensor in model.named_parameters() 
+                for name, tensor in model.named_parameters()
                 if part in name
                 ]
         else:
@@ -282,65 +288,108 @@ def run_hessian_analysis(model_name, part=None, output_suffix="full_model"):
         # use this for unigram loss
         # loss_fn = lambda logits, targets: unigram_loss(logits, targets)
         # loss_fn.reduction = "mean"
+                
+        if COMPUTE_GRADS:
+            print("   -> Computing Gradients...")
+            model.zero_grad()
+            
+            # forward & backward pass
+            logits = model(batch)
+            target_labels = batch["labels"].flatten().to(logits.device)
+            
+            manual_loss = F.cross_entropy(logits, target_labels)
+            manual_loss.backward()
         
-        hessian = HessianLinearOperator(
-            model,
-            CrossEntropyLoss(),
-            params,
-            [(batch, batch["labels"].flatten())],
-            check_deterministic=False,              # don't check randomness
-            batch_size_fn=batch_size_fn,
-        )
+            grads = []
+            for param in params:
+                if param.grad is not None:
+                    # move to CPU to save GPU memory
+                    grads.append(param.grad.detach().cpu().clone())
+                else:
+                    grads.append(None)
+            
+            # cleanup
+            del logits, manual_loss
+            model.zero_grad() 
+            torch.cuda.empty_cache()
         
-        # print the Hessian shape only once
-        if not printed_shape:
-            print(f"Hessian shape: {hessian.shape}")
-            printed_shape = True
+            save_path = os.path.join(grads_dir, f"grad_step_{step}.pt")
+            torch.save({
+                "step": step,
+                "grads": grads
+            }, save_path)
+            print(f"      Saved gradients to {save_path}")
+            
+            del grads       # delete from RAM
         
-        # Compute metrics
-        max_eig = top_k_evals(hessian, k=1)[0]
-        trace_val = hutchinson_trace_estimate(hessian, num_matvecs=5)       # returns torch.Tensor
-        stable_rank_val = stable_rank(hessian, num_matvecs=5)
         
-        # # method error
-        # R = 10  # number of method replicates
+        if COMPUTE_HESSIAN:
+            print("   -> Computing Hessian...")
+            
+            hessian = HessianLinearOperator(
+                model,
+                CrossEntropyLoss(),
+                params,
+                [(batch, batch["labels"].flatten())],
+                check_deterministic=False,              # don't check randomness
+                batch_size_fn=batch_size_fn,
+            )
+            
+            # print the Hessian shape only once
+            if not printed_shape:
+                print(f"Hessian shape: {hessian.shape}")
+                printed_shape = True
+            
+            # Compute metrics
+            max_eig = top_k_evals(hessian, k=1)[0]
+            trace_val = hutchinson_trace_estimate(hessian, num_matvecs=5)       # returns torch.Tensor
+            stable_rank_val = stable_rank(hessian, num_matvecs=5)
+            
+            # # method error
+            # R = 10  # number of method replicates
 
-        # trace_vals = []
-        # max_eig_vals = []
-        # stable_rank_vals = []
+            # trace_vals = []
+            # max_eig_vals = []
+            # stable_rank_vals = []
 
-        # for _ in range(R):
-        #     # need to convert tensors to floats 
-        #     trace_vals.append(float(hutchinson_trace(hessian, num_matvecs=50)))
-        #     max_eig_vals.append(float(top_k_evals(hessian, k=1)[0]))
-        #     stable_rank_vals.append(float(stable_rank(hessian, num_matvecs=50)))
+            # for _ in range(R):
+            #     # need to convert tensors to floats 
+            #     trace_vals.append(float(hutchinson_trace(hessian, num_matvecs=50)))
+            #     max_eig_vals.append(float(top_k_evals(hessian, k=1)[0]))
+            #     stable_rank_vals.append(float(stable_rank(hessian, num_matvecs=50)))
 
-        # trace_mean = float(np.mean(trace_vals))
-        # trace_std  = float(np.std(trace_vals))
+            # trace_mean = float(np.mean(trace_vals))
+            # trace_std  = float(np.std(trace_vals))
 
-        # max_eig_mean = float(np.mean(max_eig_vals))
-        # max_eig_std  = float(np.std(max_eig_vals))
+            # max_eig_mean = float(np.mean(max_eig_vals))
+            # max_eig_std  = float(np.std(max_eig_vals))
 
-        # stable_rank_mean = float(np.mean(stable_rank_vals))
-        # stable_rank_std  = float(np.std(stable_rank_vals))
-        
-        print(f"max eig = {max_eig:.3f}, trace = {trace_val:.3f}, stable rank = {stable_rank_val:.3f}")
-        
-        results.append(HessianMetrics(
-            revision=rev,
-            step=step,
-            trace=trace_val,
-            #trace_std=trace_std,
-            max_eig=max_eig,
-            #max_eig_std=max_eig_std,
-            stable_rank=stable_rank_val,
-            #stable_rank_std=stable_rank_std,
-        ))
+            # stable_rank_mean = float(np.mean(stable_rank_vals))
+            # stable_rank_std  = float(np.std(stable_rank_vals))
+            
+            print(f"max eig = {max_eig:.3f}, trace = {trace_val:.3f}, stable rank = {stable_rank_val:.3f}")
+            
+            results.append(HessianMetrics(
+                revision=rev,
+                step=step,
+                trace=trace_val,
+                #trace_std=trace_std,
+                max_eig=max_eig,
+                #max_eig_std=max_eig_std,
+                stable_rank=stable_rank_val,
+                #stable_rank_std=stable_rank_std,
+            ))
+            
+            # Cleanup Hessian operator to free graph memory
+            del hessian
+            torch.cuda.empty_cache()
+            
+    if COMPUTE_HESSIAN and results:
+        csv_name = os.path.join(EXPERIMENT_DIR, f"hessian_metrics_{output_suffix}_0-7.csv")
+        df = pd.DataFrame([asdict(r) for r in results])
+        df.to_csv(csv_name, index=False, float_format="%.6f")
+        print(f"\nSaved Hessian results to {csv_name}")
     
-    csv_name = os.path.join(EXPERIMENT_DIR, f"hessian_metrics_{output_suffix}_0-7.csv")
-    df = pd.DataFrame([asdict(r) for r in results])
-    df.to_csv(csv_name, index=False, float_format="%.6f")
-    print(f"\nSaved results to {csv_name}")
     
 if __name__ == "__main__":
     run_hessian_analysis("EleutherAI/pythia-14m")

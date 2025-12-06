@@ -460,7 +460,7 @@ def run_3d_quadratic_slices_demo():
         )
         plot_llc_heatmap(xs, ys, lam_mean_map, title=f"LLC slice on XY at z={z0:+.2f}")
 
-#run_grid_x4_plus_y4_demo()
+run_grid_x4_plus_y4_demo()
 #run_grid_x2_plus_y2_demo()
 #run_grid_x2y4_demo()
 #run_3d_quadratic_slices_demo()     # XY-slice heatmaps for 3D quadratic
