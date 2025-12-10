@@ -16,6 +16,8 @@ import pandas as pd
 import re
 import os
 
+import matplotlib.pyplot as plt
+
 from collections import UserDict
 from collections.abc import MutableMapping
 
@@ -41,6 +43,8 @@ from curvlinops import hutchinson_squared_fro
 
 import torch
 
+# --- memory config ---
+
 try:
     # New PyTorch 2.1+ API
     from torch.nn.attention import sdpa_kernel, SDPBackend
@@ -50,6 +54,9 @@ except Exception:
     torch.backends.cuda.enable_flash_sdp(False)
     torch.backends.cuda.enable_mem_efficient_sdp(False)
     torch.backends.cuda.enable_math_sdp(True)
+    
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
 
 @dataclass
 class HessianMetrics:
@@ -65,15 +72,14 @@ class HessianMetrics:
 # make deterministic
 manual_seed(0)
 
-# Data
-# ----
-
 # --------- Config ---------
 #MODEL = "EleutherAI/pythia-70m-deduped"
-EXPERIMENT_DIR = "hessian-batch0-7/14m"
+EXPERIMENT_DIR = "hessian-batch0-7/160m"
 os.makedirs(EXPERIMENT_DIR, exist_ok=True)
-COMPUTE_GRADS = True
-COMPUTE_HESSIAN = False
+COMPUTE_GRADS = False
+COMPUTE_HESSIAN = True              # Must be True for Plot or Metrics to work
+COMPUTE_HESSIAN_METRICS = True
+PLOT_HESSIAN = False
 MAX_LEN = 256
 
 def get_step_tags(model_id: str):
@@ -227,6 +233,10 @@ def stable_rank(H, num_matvecs=5):
     
 #     return loss
 
+def logabs(mat: torch.Tensor, epsilon: float = 1e-6) -> torch.Tensor:
+    """Computes log10(|x| + epsilon) for better Hessian visualization."""
+    return mat.abs().clamp(min=epsilon).log10()
+
 def run_hessian_analysis(model_name, part=None, output_suffix="full_model"):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -263,15 +273,14 @@ def run_hessian_analysis(model_name, part=None, output_suffix="full_model"):
     results: list[HessianMetrics] = []
     printed_shape = False
     
-    grads_dir = os.path.join(EXPERIMENT_DIR, f"gradients-{output_suffix}")
-    os.makedirs(grads_dir, exist_ok=True)
-    
     for rev, step in step_tags:
         print(f"==> {rev}")
         model = MyTransformer(tokenizer, model_name, revision=rev).to(device=device, dtype=bfloat16)
         model_vocab_size = model.hf_model.config.vocab_size
         
-        #import ipdb; ipdb.set_trace()
+        model.hf_model.gradient_checkpointing_enable()
+        
+        import ipdb; ipdb.set_trace()
         
         if part is not None:
             params = [
@@ -290,6 +299,8 @@ def run_hessian_analysis(model_name, part=None, output_suffix="full_model"):
         # loss_fn.reduction = "mean"
                 
         if COMPUTE_GRADS:
+            grads_dir = os.path.join(EXPERIMENT_DIR, f"gradients-{output_suffix}")
+            os.makedirs(grads_dir, exist_ok=True)
             print("   -> Computing Gradients...")
             model.zero_grad()
             
@@ -324,13 +335,35 @@ def run_hessian_analysis(model_name, part=None, output_suffix="full_model"):
         
         
         if COMPUTE_HESSIAN:
-            print("   -> Computing Hessian...")
+            
+            # split batch for lower memory allocation
+            micro_batches = []
+            batch_size = batch["input_ids"].shape[0]
+            
+            for i in range(batch_size):
+                
+                # slice dictionary for i-th sample
+                mb = {
+                    k: v[i:i+1] 
+                    for k, v in batch.items() 
+                    if isinstance(v, torch.Tensor)
+                }
+                
+                # slice and flatten targets
+                mb_targets = mb["labels"].flatten()
+                
+                
+                # add tuple (inputs, targets) to list
+                micro_batches.append((mb, mb_targets))
+            
+            #import ipdb; ipdb.set_trace()
             
             hessian = HessianLinearOperator(
                 model,
                 CrossEntropyLoss(),
                 params,
-                [(batch, batch["labels"].flatten())],
+                #[(batch, batch["labels"].flatten())],
+                micro_batches,
                 check_deterministic=False,              # don't check randomness
                 batch_size_fn=batch_size_fn,
             )
@@ -338,53 +371,146 @@ def run_hessian_analysis(model_name, part=None, output_suffix="full_model"):
             # print the Hessian shape only once
             if not printed_shape:
                 print(f"Hessian shape: {hessian.shape}")
+                
+                print(f"Dataset Stats:")
+                # calculate unique tokens used in specified batch
+                valid_ids = batch["input_ids"][batch["attention_mask"] == 1]        # filter out padding tokens
+                unique_count = torch.unique(valid_ids).numel()
+                print(f"   Unique tokens: {unique_count} / {model_vocab_size} ({unique_count/model_vocab_size:.2%})")
+                      
                 printed_shape = True
+                
+            if PLOT_HESSIAN:
+                PLOT_STEPS = [16, 256, 2000]
+                PYTHIA_HIDDEN_SIZE = 128
+                PLOT_DIM = 50 * PYTHIA_HIDDEN_SIZE  # 256
+                
+                if step in PLOT_STEPS:
+                    print(f"   -> Generating Hessian plot for step {step}...")
+                    
+                    num_params = sum(p.numel() for p in params)
+                    
+                    # --- FIX: Compute columns sequentially to avoid OOM ---
+                    H_plot_data = np.zeros((PLOT_DIM, PLOT_DIM), dtype=np.float32)
+                    
+                    print(f"      Computing {PLOT_DIM} columns sequentially...")
+                    
+                    for i in range(PLOT_DIM):
+                        # 1. Create a single probe vector [Total_Params, 1]
+                        v = torch.zeros((num_params, 1), device=device, dtype=bfloat16)
+                        v[i, 0] = 1.0
+                        
+                        # 2. Compute Hessian-Vector Product
+                        # Triggers backward pass for just this one column
+                        Hv = hessian @ v
+                        
+                        # 3. Store result
+                        # Extract only the top-left part we care about and move to CPU
+                        H_plot_data[:, i] = Hv[:PLOT_DIM, 0].float().detach().cpu().numpy()
+                        
+                        # 4. Cleanup to keep VRAM flat
+                        del v, Hv
+                        torch.cuda.empty_cache()
+
+                    # --- Visualization ---
+                    # Apply Log Abs Transform
+                    H_plot_data = np.log10(np.abs(H_plot_data) + 1e-6)
+                    
+                    fig, ax = plt.subplots(figsize=(8, 7))
+                    
+                    min_val = H_plot_data.min()
+                    max_val = H_plot_data.max()
+                    
+                    img = ax.imshow(H_plot_data, cmap="viridis", vmin=min_val, vmax=max_val)
+
+                    # Draw "Token Boundary" Grid Lines
+                    boundaries = list(range(0, PLOT_DIM + 1, PYTHIA_HIDDEN_SIZE))
+                    
+                    for pos in boundaries:
+                        if pos not in [0, PLOT_DIM]:
+                            style = {"color": "white", "lw": 1.0, "ls": "-"}
+                            ax.axhline(y=pos - 0.5, **style)
+                            ax.axvline(x=pos - 0.5, **style)
+
+                    # Ticks and Labels
+                    label_positions = [
+                        (boundaries[i] + boundaries[i+1]) / 2 
+                        for i in range(len(boundaries)-1)
+                    ]
+                    labels = [f"Token {i}" for i in range(len(label_positions))]
+                    
+                    if labels:
+                        ax.set_xticks(label_positions)
+                        ax.set_xticklabels(labels)
+                        ax.set_yticks(label_positions)
+                        ax.set_yticklabels(labels)
+                    else:
+                        ax.set_xlabel("Parameter Index")
+                        ax.set_ylabel("Parameter Index")
+
+                    ax.set_title(f"Hessian Input Embeddings (Log Abs)\nStep {step}")
+                    
+                    cbar = fig.colorbar(img, ax=ax, shrink=0.8)
+                    cbar.set_label("log10(|Curvature|)")
+
+                    # Save
+                    plot_filename = os.path.join(EXPERIMENT_DIR, f"hessian_logabs_step_{step}.png")
+                    plt.savefig(plot_filename, dpi=200, bbox_inches='tight')
+                    plt.close()
+                    
+                    print(f"      Plot saved to {plot_filename}")
+                    
+                    # Clean up temp buffers
+                    del H_plot_data
+                    torch.cuda.empty_cache()
             
-            # Compute metrics
-            max_eig = top_k_evals(hessian, k=1)[0]
-            trace_val = hutchinson_trace_estimate(hessian, num_matvecs=5)       # returns torch.Tensor
-            stable_rank_val = stable_rank(hessian, num_matvecs=5)
-            
-            # # method error
-            # R = 10  # number of method replicates
+            if COMPUTE_HESSIAN_METRICS:
+                
+                # Compute metrics
+                max_eig = top_k_evals(hessian, k=1)[0]
+                trace_val = hutchinson_trace_estimate(hessian, num_matvecs=5)       # returns torch.Tensor
+                stable_rank_val = stable_rank(hessian, num_matvecs=5)
+                
+                # # method error
+                # R = 10  # number of method replicates
 
-            # trace_vals = []
-            # max_eig_vals = []
-            # stable_rank_vals = []
+                # trace_vals = []
+                # max_eig_vals = []
+                # stable_rank_vals = []
 
-            # for _ in range(R):
-            #     # need to convert tensors to floats 
-            #     trace_vals.append(float(hutchinson_trace(hessian, num_matvecs=50)))
-            #     max_eig_vals.append(float(top_k_evals(hessian, k=1)[0]))
-            #     stable_rank_vals.append(float(stable_rank(hessian, num_matvecs=50)))
+                # for _ in range(R):
+                #     # need to convert tensors to floats 
+                #     trace_vals.append(float(hutchinson_trace(hessian, num_matvecs=50)))
+                #     max_eig_vals.append(float(top_k_evals(hessian, k=1)[0]))
+                #     stable_rank_vals.append(float(stable_rank(hessian, num_matvecs=50)))
 
-            # trace_mean = float(np.mean(trace_vals))
-            # trace_std  = float(np.std(trace_vals))
+                # trace_mean = float(np.mean(trace_vals))
+                # trace_std  = float(np.std(trace_vals))
 
-            # max_eig_mean = float(np.mean(max_eig_vals))
-            # max_eig_std  = float(np.std(max_eig_vals))
+                # max_eig_mean = float(np.mean(max_eig_vals))
+                # max_eig_std  = float(np.std(max_eig_vals))
 
-            # stable_rank_mean = float(np.mean(stable_rank_vals))
-            # stable_rank_std  = float(np.std(stable_rank_vals))
-            
-            print(f"max eig = {max_eig:.3f}, trace = {trace_val:.3f}, stable rank = {stable_rank_val:.3f}")
-            
-            results.append(HessianMetrics(
-                revision=rev,
-                step=step,
-                trace=trace_val,
-                #trace_std=trace_std,
-                max_eig=max_eig,
-                #max_eig_std=max_eig_std,
-                stable_rank=stable_rank_val,
-                #stable_rank_std=stable_rank_std,
-            ))
+                # stable_rank_mean = float(np.mean(stable_rank_vals))
+                # stable_rank_std  = float(np.std(stable_rank_vals))
+                
+                print(f"max eig = {max_eig:.3f}, trace = {trace_val:.3f}, stable rank = {stable_rank_val:.3f}")
+                
+                results.append(HessianMetrics(
+                    revision=rev,
+                    step=step,
+                    trace=trace_val,
+                    #trace_std=trace_std,
+                    max_eig=max_eig,
+                    #max_eig_std=max_eig_std,
+                    stable_rank=stable_rank_val,
+                    #stable_rank_std=stable_rank_std,
+                ))
             
             # Cleanup Hessian operator to free graph memory
             del hessian
             torch.cuda.empty_cache()
             
-    if COMPUTE_HESSIAN and results:
+    if COMPUTE_HESSIAN_METRICS and results:
         csv_name = os.path.join(EXPERIMENT_DIR, f"hessian_metrics_{output_suffix}_0-7.csv")
         df = pd.DataFrame([asdict(r) for r in results])
         df.to_csv(csv_name, index=False, float_format="%.6f")

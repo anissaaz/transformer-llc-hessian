@@ -7,9 +7,9 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 BASE_DIR = Path("mean-std-hessian-batch0-7")
-RUN_DIRS = sorted(BASE_DIR.glob("mean-std-embedin-attn-50matvec"))
+RUN_DIRS = sorted(BASE_DIR.glob("mean-std-5matvec"))
 
-PLOTS_DIR = BASE_DIR / "mean-std-embedin-attn-50matvec" / "plots_50matvec_mean_std"
+PLOTS_DIR = BASE_DIR / "mean-std-5matvec" / "plots_5matvec_mean_std_cut10^4"
 
 def load_attention_qkv_runs():
     dfs = []
@@ -101,11 +101,11 @@ def plot_components(df, out_dir: Path, prefix=""):
 def main():
     attn_df = load_attention_qkv_runs()
     embed_in_df = load_embed_runs("embed_in")
-    #embed_out_df = load_embed_runs("embed_out")
+    embed_out_df = load_embed_runs("embed_out")
     
     plot_components(attn_df, out_dir=PLOTS_DIR, prefix="attn_")
     plot_components(embed_in_df, out_dir=PLOTS_DIR, prefix="embed_in_")
-    #plot_components(embed_out_df, out_dir=PLOTS_DIR, prefix="embed_out_")
+    plot_components(embed_out_df, out_dir=PLOTS_DIR, prefix="embed_out_")
 
 if __name__ == "__main__":
     main()

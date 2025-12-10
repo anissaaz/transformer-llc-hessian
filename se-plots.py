@@ -9,9 +9,9 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 BASE_DIR = Path(".")
-RUN_DIRS = sorted(BASE_DIR.glob("hessian-batch0-7/14m-seed*"))
+RUN_DIRS = sorted(BASE_DIR.glob("hessian-batch0-7/31m"))
 MAX_STEP = 10000
-OUTPUT_DIR = Path("hessian-batch0-7/avg_plots_14m_seeds")
+OUTPUT_DIR = Path("hessian-batch0-7/31m/plots")
 
 def load_attention_qkv_runs():
     """
@@ -61,9 +61,8 @@ def add_learning_stage_lines():
     for s in [16, 256, 2000]:
         plt.axvline(s, linestyle="--", linewidth=1, alpha=0.7)
         
-def plot_attention(attn_df: pd.DataFrame, out_dir="plots-seaborn-5batches-se"):
+def plot_attention(attn_df: pd.DataFrame, out_dir="hessian-batch0-7"):
     out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
     
     attn_df_limit = attn_df[attn_df["step"] <= MAX_STEP].copy()
     
@@ -87,7 +86,9 @@ def plot_attention(attn_df: pd.DataFrame, out_dir="plots-seaborn-5batches-se"):
         plt.grid(True, which="both", alpha=0.3)
         plt.tight_layout()
         
-        out_path = out_dir / "14m-seed1" / "plots" / f"attn_qkv_{metric}_linear.png"
+        out_path = out_dir / "31m" / "plots" / f"attn_qkv_{metric}_linear.png"
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        
         plt.savefig(out_path, dpi=200)
         plt.close()
         print(f"saved {out_path}")
@@ -117,7 +118,7 @@ def plot_embedding(embed_df, kind):
         add_learning_stage_lines()
         plt.xscale("log")
         #plt.yscale("symlog", linthresh=10)
-        plt.title(f"{kind}: {metric} vs step\n(Mean ± SE over {len(RUN_DIRS)} seeds)")
+        plt.title(f"{kind}: {metric} vs step)") #\n(Mean ± SE over {len(RUN_DIRS)} seeds
         plt.grid(True, which="both", alpha=0.3)
         plt.tight_layout()
         
@@ -130,13 +131,13 @@ def plot_embedding(embed_df, kind):
         print(f"saved {out_path}")
         
 def main():
-    #attn_df = load_attention_qkv_runs()
+    attn_df = load_attention_qkv_runs()
     embed_in_df  = load_embed_runs("embed_in")
-    #embed_out_df = load_embed_runs("embed_out")
+    embed_out_df = load_embed_runs("embed_out")
 
-    #plot_attention(attn_df)
+    plot_attention(attn_df)
     plot_embedding(embed_in_df,  "embed_in")
-    #plot_embedding(embed_out_df, "embed_out")
+    plot_embedding(embed_out_df, "embed_out")
 
 
 if __name__ == "__main__":
