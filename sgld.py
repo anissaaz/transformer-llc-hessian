@@ -30,7 +30,7 @@ class SGLD(torch.optim.Optimizer):
         
         super(SGLD, self).__init__(params, defaults)
     
-        # Save initial parameters if elasticity term is set
+        # save initial parameters if elasticity term is set
         for group in self.param_groups:
             if group["elasticity"] != 0:
                 for p in group["params"]:
@@ -52,14 +52,16 @@ class SGLD(torch.optim.Optimizer):
                 
                 #import ipdb; ipdb.set_trace();
                 
-                # Drift term 1: Gradient
+                # Drift term 1: Gradient = N * 1/n sum(delta log p(x|theta))
+                # p.grad.data = 1/n sum(delta_L)
+                # group["num_samples"] = N -> for scaling
                 dw = p.grad.data * group["num_samples"] / group["temperature"]
                 
-                # weight decay drift
+                # weight decay drift: delta log p(theta)
                 if group["weight_decay"] != 0:
                     dw.add_(p.data, alpha=group["weight_decay"])
                 
-                # Drift term 2: Elasticity (Localization)
+                # Drift term 2: elasticity (localization)
                 if group["elasticity"] != 0:
                     initial_param = self.state[p]["initial_param"]
                     dw.add_((p.data - initial_param), alpha=group["elasticity"])

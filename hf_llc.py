@@ -40,7 +40,7 @@ CONFIG = {
     "lr": 1e-5,                     # epsilon (step size)
     "elasticity": 100.0,            # gamma (localization strength)
     "temperature": SGLD_TEMP,
-    "num_samples": BATCH_SIZE,
+    "num_samples": TOTAL_DATA_NEEDED,
     "num_steps": 400,
     "burnin": 100                   # steps to discard
             
@@ -167,7 +167,8 @@ def run_llc_analysis(model_name, part=None, output_suffix="full_model"):
         
         # --- SGLD setup with component filtering ---
         chain_model = copy.deepcopy(model).to(device)
-        chain_model.train()
+        #chain_model.train()
+        chain_model.eval()
         
         chain_model.requires_grad_(False)
         
@@ -189,7 +190,10 @@ def run_llc_analysis(model_name, part=None, output_suffix="full_model"):
             temperature=CONFIG['temperature'],
             elasticity=CONFIG['elasticity']
         )
-        estimator = LLCEstimator(CONFIG['num_samples'], CONFIG['temperature'], init_loss)
+        estimator = LLCEstimator(
+            num_samples = CONFIG['num_samples'],
+            beta = 1/CONFIG['temperature'], 
+            init_loss=init_loss)
         
         # --- Monte Carlo chain ---
         for i, (b_ids, b_mask, b_labels) in tqdm(enumerate(dataloader), total=CONFIG['num_steps']):
