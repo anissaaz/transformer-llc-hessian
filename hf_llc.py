@@ -1,3 +1,6 @@
+# Implements SGLD optimizer and LLC estimation for Transformer analysis.
+# Adapted from the devinterp library by Timaeus Research.
+
 import os
 import re
 import copy
@@ -152,7 +155,7 @@ def run_llc_analysis(model_name, part=None, output_suffix="full_model"):
         
         model.hf_model.eval()               # model in evaluation mode
         
-        # --- compute initial loss L(w*) ---
+        # compute initial loss L(w*)
         init_loss_accum = 0.0
         with torch.no_grad():
             for i, (b_ids, b_mask, b_labels) in enumerate(dataloader):
@@ -165,7 +168,7 @@ def run_llc_analysis(model_name, part=None, output_suffix="full_model"):
         init_loss = init_loss_accum / 10
         print(f"L(w*): {init_loss:.4f}")
         
-        # --- SGLD setup with component filtering ---
+        # SGLD setup with component filtering
         chain_model = copy.deepcopy(model).to(device)
         #chain_model.train()
         chain_model.eval()
@@ -182,7 +185,7 @@ def run_llc_analysis(model_name, part=None, output_suffix="full_model"):
         if not params_to_optimize:
             raise ValueError(f"No parameters found matching component: {part}")
         
-        # --- Optimizer ---
+        # optimizer
         optimizer = SGLD(
             params_to_optimize,
             lr=CONFIG['lr'],
@@ -195,7 +198,7 @@ def run_llc_analysis(model_name, part=None, output_suffix="full_model"):
             beta = 1/CONFIG['temperature'], 
             init_loss=init_loss)
         
-        # --- Monte Carlo chain ---
+        # Monte Carlo chain
         for i, (b_ids, b_mask, b_labels) in tqdm(enumerate(dataloader), total=CONFIG['num_steps']):
             if i >= CONFIG['num_steps']: break
             
