@@ -55,7 +55,7 @@ Output Results are saved as CSV files in the llc-bs64-steps400/ directory.
 
 ## References & Acknowledgements
 
-This implementation is based on the **Developmental Interpretability** research agenda and the [devinterp](https://github.com/timaeus-research/devinterp) library by Timaeus Research.
+This implementation is based on the [devinterp](https://github.com/timaeus-research/devinterp) library by Timaeus Research.
 
 **Primary Citations:**
 * **Methodology:** Lau, E., et al. (2023). *The Local Learning Coefficient: A Singularity-Aware Complexity Measure for Deep Learning*. [arXiv:2308.12108](https://arxiv.org/abs/2308.12108)
