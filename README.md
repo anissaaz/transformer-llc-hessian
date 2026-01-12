@@ -1,30 +1,8 @@
 # Local Learning Coefficient (LLC) Estimation via SGLD
 
-This branch implements a thermodynamic approach to measuring the complexity and "flatness" of the loss landscape in Transformer models.
+This branch implements an approach to measuring the complexity and "flatness" of the loss landscape in Transformer models.
 
 By running **Stochastic Gradient Langevin Dynamics (SGLD)** chains initialized at pretrained checkpoints, we estimate the **Local Learning Coefficient (LLC)** ($\hat{\lambda}$). This metric serves as a proxy for the effective dimensionality of the local basin of attraction, offering insights into the developmental stages of the model.
-
-## Core Methodology
-
-The LLC is estimated using the formulation from Singular Learning Theory (SLT). We treat the optimization trajectory as a sampling process from a Gibbs distribution.
-
-### 1. The Algorithm (SGLD)
-We use a custom SGLD optimizer (`sgld.py`) that introduces a localization term (elasticity) to ensure the sampling chain stays within the local basin of the pretrained weights $w^*$:
-
-$$\Delta w = - \frac{\epsilon}{2} \left( \nabla L(w) + \gamma (w - w^*) \right) + \eta$$
-
-Where:
-- $\nabla L(w)$ is the gradient of the loss.
-- $\gamma$ (`elasticity`) is the spring constant anchoring the chain to $w^*$.
-- $\eta \sim \mathcal{N}(0, \epsilon)$ is the injected Gaussian noise.
-
-### 2. LLC Estimation
-The `LLCEstimator` computes the complexity metric based on the difference between the average loss of the SGLD chain ($E[L]$) and the initial loss ($L(w^*)$):
-
-$$\hat{\lambda} = n \beta (E[L] - L(w^*))$$
-
-Where $n$ is the number of samples and $\beta$ is the inverse temperature.
-
 
 ## Core Methodology
 
