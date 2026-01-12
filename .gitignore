@@ -4,3 +4,5 @@ __pycache__/
 *.py[cod]
 *.csv
 *.png
+llc-bs64-steps400-old/
+llc-bs64-steps400-new/
