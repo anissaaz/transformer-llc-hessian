@@ -16,6 +16,8 @@ import pandas as pd
 import re
 import os
 
+from sklearn.cluster import MiniBatchKMeans
+
 import matplotlib.pyplot as plt
 
 from collections import UserDict
@@ -40,6 +42,8 @@ from huggingface_hub import hf_hub_download
 from curvlinops import HessianLinearOperator
 from curvlinops import hutchinson_trace
 from curvlinops import hutchinson_squared_fro
+from curvlinops import hutchinson_diag
+from curvlinops.submatrix import SubmatrixLinearOperator
 
 import torch
 
@@ -74,12 +78,13 @@ manual_seed(0)
 
 # --------- Config ---------
 #MODEL = "EleutherAI/pythia-70m-deduped"
-EXPERIMENT_DIR = "hessian-batch0-7/160m"
+EXPERIMENT_DIR = "hessian-batch0-63/14m"
 os.makedirs(EXPERIMENT_DIR, exist_ok=True)
 COMPUTE_GRADS = False
-COMPUTE_HESSIAN = True              # Must be True for Plot or Metrics to work
-COMPUTE_HESSIAN_METRICS = True
-PLOT_HESSIAN = False
+COMPUTE_HESSIAN = True              # Must be True for Clustering or Plot or Metrics to work
+COMPUTE_HESSIAN_METRICS = False
+PLOT_HESSIAN = True
+CLUSTER_HESSIAN = False
 MAX_LEN = 256
 
 def get_step_tags(model_id: str):
@@ -237,7 +242,7 @@ def logabs(mat: torch.Tensor, epsilon: float = 1e-6) -> torch.Tensor:
     """Computes log10(|x| + epsilon) for better Hessian visualization."""
     return mat.abs().clamp(min=epsilon).log10()
 
-def run_hessian_analysis(model_name, part=None, output_suffix="full_model"):
+def run_hessian_analysis(model_name, param_selector=None, output_suffix="full_model"):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
@@ -245,7 +250,7 @@ def run_hessian_analysis(model_name, part=None, output_suffix="full_model"):
     step_tags = [
         (rev, step)
         for rev, step in step_tags
-        if step in {0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1000, 2000, 5000, 10000, 20000, 50000, 100000, 140000}
+        if step in {0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1000, 2000, 5000, 10000, 20000, 36000, 50000, 72000, 100000, 107000, 143000}
     ]
 
     tokenizer = AutoTokenizer.from_pretrained("EleutherAI/pythia-14m")
@@ -253,7 +258,8 @@ def run_hessian_analysis(model_name, part=None, output_suffix="full_model"):
     tokenizer_vocab_size = tokenizer.vocab_size
     
     dataset = load_dataset("EleutherAI/the_pile_deduplicated", split ="train[:1%]")
-    subset = dataset.shuffle(seed=0).select(range(0, 8))
+    #dataset = load_dataset("/pub/hofmann-scratch/datasets/the_pile_deduplicated")
+    subset = dataset.shuffle(seed=0).select(range(0, 64))
     texts = [tokenizer.bos_token + ex["text"] + tokenizer.eos_token for ex in subset]
 
     batch = tokenizer(
@@ -272,6 +278,11 @@ def run_hessian_analysis(model_name, part=None, output_suffix="full_model"):
     
     results: list[HessianMetrics] = []
     printed_shape = False
+    printed_stats = False
+    
+    # --- STORAGE FOR CLUSTERING ---
+    clustering_data = [] # Stores (step, diagonal_tensor)
+    clustering_counts = None # Will store the name mapping
     
     for rev, step in step_tags:
         print(f"==> {rev}")
@@ -280,19 +291,44 @@ def run_hessian_analysis(model_name, part=None, output_suffix="full_model"):
         
         model.hf_model.gradient_checkpointing_enable()
         
-        import ipdb; ipdb.set_trace()
+        component_counts = None
         
-        if part is not None:
-            params = [
-                tensor                                          # store only the tensor
-                for name, tensor in model.named_parameters()
-                if part in name
-                ]
+        if param_selector is not None:
+            selector_output = param_selector(model, verbose=(not printed_shape))
+            
+            printed_stats = True
+            
+            if isinstance(selector_output, tuple):
+                
+                if len(selector_output) == 3:
+                    params, indices, component_counts = selector_output
+                    use_submatrix = True
+                    
+                elif len(selector_output) == 2:
+                    params, indices = selector_output
+                    use_submatrix = True
+                    
+                else:
+                    params = selector_output[0]
+                    use_submatrix = False
+                
         else:
-            params = [
-                tensor
-                for name, tensor in model.named_parameters()
-            ]
+            params = list(model.parameters())
+            use_submatrix = False
+            
+        # Ensure component_counts is populated even if param_selector is None (Full Model)
+        if component_counts is None:
+             component_counts = []
+             for name, p in model.named_parameters():
+                 if p.requires_grad:
+                     component_counts.append((name, p.numel()))
+                     
+        # Save this mapping for the final clustering step (only need to do it once)
+        if clustering_counts is None:
+            clustering_counts = component_counts
+
+        
+        #import ipdb; ipdb.set_trace()
         
         # use this for unigram loss
         # loss_fn = lambda logits, targets: unigram_loss(logits, targets)
@@ -368,6 +404,10 @@ def run_hessian_analysis(model_name, part=None, output_suffix="full_model"):
                 batch_size_fn=batch_size_fn,
             )
             
+            if use_submatrix:
+                print(f"   -> Wrapping in SubmatrixLinearOperator ({len(indices)}x{len(indices)})")
+                subhessian = SubmatrixLinearOperator(hessian, indices, indices)
+                            
             # print the Hessian shape only once
             if not printed_shape:
                 print(f"Hessian shape: {hessian.shape}")
@@ -380,89 +420,157 @@ def run_hessian_analysis(model_name, part=None, output_suffix="full_model"):
                       
                 printed_shape = True
                 
-            if PLOT_HESSIAN:
-                PLOT_STEPS = [16, 256, 2000]
-                PYTHIA_HIDDEN_SIZE = 128
-                PLOT_DIM = 50 * PYTHIA_HIDDEN_SIZE  # 256
+            
+            if CLUSTER_HESSIAN:
+                print(f"   -> [Clustering] Computing diagonal for step {step}...")
+                diag = hutchinson_diag(hessian, num_matvecs=5)
                 
-                if step in PLOT_STEPS:
-                    print(f"   -> Generating Hessian plot for step {step}...")
+                # Move to CPU immediately to free GPU
+                clustering_data.append(diag.cpu())
+                
+            if PLOT_HESSIAN and step in [0, 16, 256, 2000, 10000, 50000, 143000]:
+                
+                if use_submatrix:
+                    target_hessian = subhessian
+                    plot_dim_size = len(indices)
                     
-                    num_params = sum(p.numel() for p in params)
+                else:
+                    target_hessian = hessian
+                    full_size = sum(p.numel() for p in params)
+                    plot_dim_size = min(500, full_size)
+                
+                print(f"   -> Generating Hessian plot for step {step}...")
+                
+                #num_params = sum(p.numel() for p in params)
+                
+                # --- Compute columns sequentially to avoid OOM ---
+                H_plot_data = np.zeros((plot_dim_size, plot_dim_size), dtype=np.float32)
+                
+                batch_size = 128
+                
+                print(f"      Computing {plot_dim_size} columns in batches of {batch_size}...")
+                
+                for start_col in range(0, plot_dim_size, batch_size):
+                    end_col = min(start_col + batch_size, plot_dim_size)
+                    current_batch_width = end_col - start_col
                     
-                    # --- FIX: Compute columns sequentially to avoid OOM ---
-                    H_plot_data = np.zeros((PLOT_DIM, PLOT_DIM), dtype=np.float32)
+                    # Create a "slab" of the Identity matrix
+                    # Shape: [Total_Params, Batch_Size]
+                    # This creates vectors where v[i, 0]=1, v[i+1, 1]=1, etc.
+                    V_batch = torch.zeros((plot_dim_size, current_batch_width), device=device, dtype=bfloat16)
                     
-                    print(f"      Computing {PLOT_DIM} columns sequentially...")
+                    # fill diagonal with batch
+                    for k in range(current_batch_width):
+                        V_batch[start_col + k, k] = 1.0
                     
-                    for i in range(PLOT_DIM):
-                        # 1. Create a single probe vector [Total_Params, 1]
-                        v = torch.zeros((num_params, 1), device=device, dtype=bfloat16)
-                        v[i, 0] = 1.0
+                    # compute Hessian-Matrix Product
+                    # triggers one backward pass for 'current_batch_width' columns simultaneously  
+                    try:
+                        Hv_batch = target_hessian @ V_batch
                         
-                        # 2. Compute Hessian-Vector Product
-                        # Triggers backward pass for just this one column
-                        Hv = hessian @ v
-                        
-                        # 3. Store result
-                        # Extract only the top-left part we care about and move to CPU
-                        H_plot_data[:, i] = Hv[:PLOT_DIM, 0].float().detach().cpu().numpy()
-                        
-                        # 4. Cleanup to keep VRAM flat
-                        del v, Hv
-                        torch.cuda.empty_cache()
-
-                    # --- Visualization ---
-                    # Apply Log Abs Transform
-                    H_plot_data = np.log10(np.abs(H_plot_data) + 1e-6)
+                        # Store results
+                        # Hv_batch is [Rows, Batch_Cols] -> Map to H_plot_data[:, start:end]
+                        H_plot_data[:, start_col:end_col] = Hv_batch.float().detach().cpu().numpy()
                     
-                    fig, ax = plt.subplots(figsize=(8, 7))
+                    except RuntimeError as e:
+                        if "out of memory" in str(e):
+                            print(f"      ! OOM with batch size {batch_size}. Clearing cache and retrying sequentially for this block.")
+                            torch.cuda.empty_cache()
+                            # Fallback logic could go here, or just crash if critical
+                            raise e
+                        else:
+                            raise e
                     
-                    min_val = H_plot_data.min()
-                    max_val = H_plot_data.max()
-                    
-                    img = ax.imshow(H_plot_data, cmap="viridis", vmin=min_val, vmax=max_val)
-
-                    # Draw "Token Boundary" Grid Lines
-                    boundaries = list(range(0, PLOT_DIM + 1, PYTHIA_HIDDEN_SIZE))
-                    
-                    for pos in boundaries:
-                        if pos not in [0, PLOT_DIM]:
-                            style = {"color": "white", "lw": 1.0, "ls": "-"}
-                            ax.axhline(y=pos - 0.5, **style)
-                            ax.axvline(x=pos - 0.5, **style)
-
-                    # Ticks and Labels
-                    label_positions = [
-                        (boundaries[i] + boundaries[i+1]) / 2 
-                        for i in range(len(boundaries)-1)
-                    ]
-                    labels = [f"Token {i}" for i in range(len(label_positions))]
-                    
-                    if labels:
-                        ax.set_xticks(label_positions)
-                        ax.set_xticklabels(labels)
-                        ax.set_yticks(label_positions)
-                        ax.set_yticklabels(labels)
-                    else:
-                        ax.set_xlabel("Parameter Index")
-                        ax.set_ylabel("Parameter Index")
-
-                    ax.set_title(f"Hessian Input Embeddings (Log Abs)\nStep {step}")
-                    
-                    cbar = fig.colorbar(img, ax=ax, shrink=0.8)
-                    cbar.set_label("log10(|Curvature|)")
-
-                    # Save
-                    plot_filename = os.path.join(EXPERIMENT_DIR, f"hessian_logabs_step_{step}.png")
-                    plt.savefig(plot_filename, dpi=200, bbox_inches='tight')
-                    plt.close()
-                    
-                    print(f"      Plot saved to {plot_filename}")
-                    
-                    # Clean up temp buffers
-                    del H_plot_data
+                    # Cleanup
+                    del V_batch, Hv_batch
                     torch.cuda.empty_cache()
+                    
+                
+                # for i in range(plot_dim_size):
+                #     # Create a single probe vector [Total_Params, 1]
+                #     v = torch.zeros((plot_dim_size, 1), device=device, dtype=bfloat16)
+                #     v[i, 0] = 1.0
+                    
+                #     # Compute Hessian-Vector Product
+                #     # Triggers backward pass for just this one column
+                #     Hv = target_hessian @ v
+                    
+                #     # Store result
+                #     # Extract only the top-left part we care about and move to CPU
+                #     H_plot_data[:, i] = Hv[:, 0].float().detach().cpu().numpy()
+                    
+                #     # Cleanup to keep VRAM flat
+                #     del v, Hv
+                #     torch.cuda.empty_cache()
+
+                # --- Visualization ---
+                # Log Abs transform to make features visible
+                H_plot_data = np.log10(np.abs(H_plot_data) + 1e-6)
+                
+                fig, ax = plt.subplots(figsize=(10, 8))
+                
+                min_val, max_val = H_plot_data.min(), H_plot_data.max()
+                # fix min/max for comparability
+                #FIXED_VMIN = -6.0
+                #FIXED_VMAX = -1.0
+                
+                img = ax.imshow(H_plot_data, cmap="viridis", vmin=min_val, vmax=max_val)
+
+                # DRAW DYNAMIC AXES
+                if component_counts:
+                    current_pos = 0
+                    tick_locs = []
+                    tick_labels = []
+                    
+                    for name, count in component_counts:
+                        if count == 0: continue
+                        
+                        # Calculate center of this section for the label
+                        center = current_pos + (count / 2)
+                        tick_locs.append(center)
+                        tick_labels.append(name)
+                        
+                        # Draw Divider Line at the end of this section
+                        end_pos = current_pos + count
+                        
+                        # Don't draw line at the very end of image
+                        if end_pos < H_plot_data.shape[0]:
+                            # -0.5 puts the line exactly between pixels
+                            ax.axhline(y=end_pos - 0.5, color="white", linestyle="--", linewidth=0.8, alpha=0.7)
+                            ax.axvline(x=end_pos - 0.5, color="white", linestyle="--", linewidth=0.8, alpha=0.7)
+                        
+                        current_pos += count
+                    
+                    # Apply labels
+                    ax.set_xticks(tick_locs)
+                    ax.set_xticklabels(tick_labels, rotation=45, ha="right", fontsize=9)
+                    ax.set_yticks(tick_locs)
+                    ax.set_yticklabels(tick_labels, fontsize=9)
+                    
+                # Add secondary axes on Top and Right to show numeric indices (0, 100, 200...)
+                # This works automatically because they inherit the 0..N limits from imshow
+                sec_ax_x = ax.secondary_xaxis('top')
+                #sec_ax_x.set_xlabel('Parameter Index', fontsize=10)
+                sec_ax_x.tick_params(axis='x', labelsize=9)
+
+                sec_ax_y = ax.secondary_yaxis('right')
+                sec_ax_y.set_ylabel('Parameter Index', fontsize=10)
+                sec_ax_y.tick_params(axis='y', labelsize=9)
+                
+                    
+                ax.set_title(f"Hessian Sample: {output_suffix}\nStep {step}")
+                cbar = fig.colorbar(img, ax=ax, shrink=0.8)
+                cbar.set_label("log10(|Curvature|)")
+
+                plot_filename = os.path.join(EXPERIMENT_DIR, f"hessian_step_{step}_{output_suffix}.png")
+                plt.savefig(plot_filename, dpi=200, bbox_inches='tight')
+                plt.close()
+                
+                print(f"      Plot saved to {plot_filename}")
+                
+                # Clean up temp buffers
+                del H_plot_data
+                torch.cuda.empty_cache()
             
             if COMPUTE_HESSIAN_METRICS:
                 
@@ -510,6 +618,115 @@ def run_hessian_analysis(model_name, part=None, output_suffix="full_model"):
             del hessian
             torch.cuda.empty_cache()
             
+    if CLUSTER_HESSIAN and len(clustering_data) > 0:
+        print("\n" + "="*40)
+        print("Running K-Means Clustering on Parameter Trajectories")
+        print("="*40)
+        
+        # 1. Prepare Data Matrix [Params x Steps]
+        # Stack the collected diagonals
+        X = torch.stack(clustering_data, dim=1).float().numpy()
+        
+        # Log-transform for better clustering (handles magnitude differences)
+        X_log = np.log10(np.abs(X) + 1e-8)
+        
+        print(f"Data Shape: {X_log.shape} (Params x Steps)")
+        
+        # 2. Run Clustering
+        n_clusters = 6
+        kmeans = MiniBatchKMeans(n_clusters=n_clusters, batch_size=4096, random_state=0)
+        cluster_labels = kmeans.fit_predict(X_log)
+
+        # 3. Map Clusters to Components using `clustering_counts`
+        # We reconstruct the names based on the counts we saved
+        
+        # Create an array of names aligned with the parameters
+        # e.g. ["embed", "embed", ... "layer0", "layer0"]
+        all_names = []
+        for name, count in clustering_counts:
+            # --- A. Parse Layer Index ---
+            # Search for "layers.X" pattern robustly
+            match = re.search(r"layers\.(\d+)\.", name)
+            if match:
+                layer_idx = match.group(1)
+                prefix = f"L{layer_idx}"
+            else:
+                prefix = "Emb/Head" # For embeddings or final layer norm
+
+            # --- B. Identify Component & Split Q/K/V ---
+            if "attention.query_key_value" in name:
+                # This tensor contains Q, K, and V stacked.
+                # We split the count into 3 equal chunks.
+                chunk = count // 3
+                
+                # Handle potential rounding errors (though usually exact for transformers)
+                remainder = count - (chunk * 3)
+                
+                all_names.extend([f"{prefix} Attn Q"] * chunk)
+                all_names.extend([f"{prefix} Attn K"] * chunk)
+                all_names.extend([f"{prefix} Attn V"] * (chunk + remainder))
+                
+            elif "attention.dense" in name:
+                all_names.extend([f"{prefix} Attn Out"] * count)
+                
+            elif "mlp.dense_h_to_4h" in name:
+                all_names.extend([f"{prefix} MLP Exp"] * count)
+                
+            elif "mlp.dense_4h_to_h" in name:
+                all_names.extend([f"{prefix} MLP Cont"] * count)
+                
+            elif "embed_in" in name:
+                all_names.extend(["Embed In"] * count)
+                
+            elif "embed_out" in name:
+                all_names.extend(["Embed Out"] * count)
+                
+            else:
+                # Fallback for LayerNorms, biases, etc.
+                if "bias" in name:
+                    all_names.extend(["Other Bias"] * count)
+                elif "layernorm" in name:
+                    all_names.extend([f"{prefix} LayerNorm"] * count)
+                else:
+                    all_names.extend(["Other"] * count)
+        
+        all_names = np.array(all_names)
+        
+        # 4. Create Statistics Table
+        df = pd.DataFrame({
+            "Component": all_names,
+            "Cluster": cluster_labels
+        })
+
+        # Crosstab: Rows=Components, Cols=Clusters (as percentages)
+        ct = pd.crosstab(df["Component"], df["Cluster"])
+        ct_pct = ct.div(ct.sum(axis=1), axis=0) * 100
+        
+        print("\nCluster Distribution (% of parameters in each component):")
+        print(ct_pct.round(1))
+        
+        # Optional: Save results
+        ct_pct.to_csv(os.path.join(EXPERIMENT_DIR, "clustering_results.csv"))
+        
+        # Save centroids
+        centroids_path = os.path.join(EXPERIMENT_DIR, "cluster_centroids.csv")
+        
+        # Get the list of steps we actually processed
+        # (Extract just the step number from the tags list)
+        processed_steps = [s[1] for s in step_tags]
+        
+        # Create a DataFrame for centroids
+        # Rows = Clusters, Columns = Steps
+        df_centroids = pd.DataFrame(
+            kmeans.cluster_centers_, 
+            columns=processed_steps
+        )
+        df_centroids.index.name = "Cluster"
+        
+        df_centroids.to_csv(centroids_path)
+        print(f"Saved cluster centroids to {centroids_path}")
+        
+        
     if COMPUTE_HESSIAN_METRICS and results:
         csv_name = os.path.join(EXPERIMENT_DIR, f"hessian_metrics_{output_suffix}_0-7.csv")
         df = pd.DataFrame([asdict(r) for r in results])
