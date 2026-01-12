@@ -79,9 +79,6 @@ You can mix and match components using the `-c` flag:
 The core logic resides in `lm_hf_curvlinops.py`.  
 You can control the experiment pipeline by modifying the global flags at the top of the file:
 
-```
-
-```python
 
 # Configuration Switches in lm_hf_curvlinops.py
 
