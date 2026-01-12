@@ -35,7 +35,7 @@ python run_transformer_cli.py \
   --size 1000
 ```
 
-### 2. Compare Query and Key Matrices  
+### Compare Query and Key Matrices  
 Layer 0, Head 2:
 
 ```
@@ -46,7 +46,7 @@ python run_transformer_cli.py \
   -s 500
 ```
 
-C## CLI Arguments
+## CLI Arguments
 
 | Argument | Description | Default |
 |--------|-------------|---------|
@@ -80,10 +80,11 @@ The core logic resides in `lm_hf_curvlinops.py`.
 You can control the experiment pipeline by modifying the global flags at the top of the file:
 
 
-# Configuration Switches in lm_hf_curvlinops.py
-
+### Configuration Switches in lm_hf_curvlinops.py
+```
 COMPUTE_GRADS = False            # Save raw gradients for each step
 COMPUTE_HESSIAN = True           # Required for metrics, plotting, or clustering
 COMPUTE_HESSIAN_METRICS = False  # Calculate trace, max eigenvalue, stable rank
 PLOT_HESSIAN = True              # Generate heatmaps (saved as .png)
 CLUSTER_HESSIAN = False          # Run K-Means on diagonal trajectories
+```
