@@ -4,7 +4,14 @@ from pathlib import Path
 from tqdm import tqdm
 from huggingface_hub import snapshot_download
 
-MODEL = "70m-seed1" # or 410m
+# --- available models with optimizer state checkpoints ---
+# 70m-seed1
+# 410m-seed1
+# 1b
+# 2.8b
+# 6.9b
+
+MODEL = "70m-seed1"
 REPO_ID = f"EleutherAI/neox-ckpt-pythia-{MODEL}"
 STEPS = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1000, 2000, 5000, 10000, 20000, 36000, 50000, 72000, 100000, 143000]
 BASE_SAVE_DIR = Path("./extracted_adam_states")
