@@ -95,6 +95,10 @@
   "tokenizer-type": "HFTokenizer",
   "vocab-file": "/local/home/aziane/data/pile-merged/20B_tokenizer.json",
 
+  "save": "/checkpoints/pythia-410m-adammini",
+  "load": "/checkpoints/pythia-410m-adammini",
+  "checkpoint_validation_with_forward_pass": false,
+
   "launcher": "slurm",
   "deepspeed_slurm": true,
 }
