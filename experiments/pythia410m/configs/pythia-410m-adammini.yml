@@ -45,9 +45,9 @@
     "cpu_offload": false
   },
 
-  # batch size (trained on 8 gpus)
-  "train_micro_batch_size_per_gpu": 8,
-  "gas": 32,
+  # batch size (trained on 4 gpus)
+  "train_micro_batch_size_per_gpu": 32,
+  "gas": 8,
   "data-impl": "mmap",
   "num_workers": 1,
 
@@ -74,8 +74,8 @@
     "min_loss_scale": 1,
   },
   # 10B tokens / (1024 sequences x 2048 tokens) = 4769
-  "train-iters": 4769,
-  "lr-decay-iters": 4769,
+  "train-iters": 5,
+  "lr-decay-iters": 5,
   "distributed-backend": "nccl",
   "lr-decay-style": "cosine",
   "warmup": 0.01,
@@ -94,6 +94,13 @@
 
   "tokenizer-type": "HFTokenizer",
   "vocab-file": "/local/home/aziane/data/pile-merged/20B_tokenizer.json",
+
+  "theoretical_peak_tflops_per_gpu": 154.8,
+
+  "use_wandb": true,
+  "wandb_project": "pythia-410m-experiments",
+  "wandb_group": "adammini-vanilla",
+  "wandb_run_name": "410m-adammini-10B-run1",
 
   "save": "/checkpoints/pythia-410m-adammini",
   "load": "/checkpoints/pythia-410m-adammini",
